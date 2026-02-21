@@ -90,6 +90,61 @@ def levenshtein_distance(a: str, b: str) -> int:
     return prev[-1]
 
 
+def levenshtein_distance_bounded(a: str, b: str, max_dist: int) -> int:
+    """
+    Compute Levenshtein distance with an upper bound.
+
+    Returns max_dist + 1 when true distance is greater than max_dist.
+    """
+    if a == b:
+        return 0
+    if max_dist < 0:
+        return max_dist + 1
+    if not a:
+        return len(b) if len(b) <= max_dist else max_dist + 1
+    if not b:
+        return len(a) if len(a) <= max_dist else max_dist + 1
+
+    len_a = len(a)
+    len_b = len(b)
+    if abs(len_a - len_b) > max_dist:
+        return max_dist + 1
+
+    # Keep the second dimension small.
+    if len_a > len_b:
+        a, b = b, a
+        len_a, len_b = len_b, len_a
+
+    prev = list(range(len_b + 1))
+    for i in range(1, len_a + 1):
+        start = max(1, i - max_dist)
+        end = min(len_b, i + max_dist)
+
+        curr = [max_dist + 1] * (len_b + 1)
+        curr[0] = i
+        row_min = max_dist + 1
+
+        if start > 1:
+            curr[start - 1] = max_dist + 1
+
+        ai = a[i - 1]
+        for j in range(start, end + 1):
+            cost = 0 if ai == b[j - 1] else 1
+            curr[j] = min(
+                prev[j] + 1,
+                curr[j - 1] + 1,
+                prev[j - 1] + cost,
+            )
+            if curr[j] < row_min:
+                row_min = curr[j]
+
+        if row_min > max_dist:
+            return max_dist + 1
+        prev = curr
+
+    return prev[len_b] if prev[len_b] <= max_dist else max_dist + 1
+
+
 def jaro_similarity(a: str, b: str) -> float:
     """Compute Jaro similarity in [0.0, 1.0]."""
     if a == b:
@@ -385,14 +440,32 @@ def match_names(
                 candidate_indices = get_candidates(src_n)
                 if not candidate_indices:
                     candidate_indices = list(range(len(target_originals)))
+                else:
+                    # Find close-length candidates first to tighten the upper bound early.
+                    src_len = len(src_n)
+                    candidate_indices = sorted(
+                        candidate_indices,
+                        key=lambda idx: abs(len(target_normalized[idx]) - src_len),
+                    )
 
                 for idx in candidate_indices:
                     tgt_n = target_normalized[idx]
-                    dist = levenshtein_distance(src_n, tgt_n)
+                    if best_distance != 10**9 and abs(len(src_n) - len(tgt_n)) >= best_distance:
+                        continue
+
+                    if best_distance == 10**9:
+                        dist = levenshtein_distance(src_n, tgt_n)
+                    else:
+                        dist = levenshtein_distance_bounded(src_n, tgt_n, best_distance - 1)
+                        if dist >= best_distance:
+                            continue
+
                     if dist < best_distance:
                         best_distance = dist
                         best_name = target_originals[idx]
                         best_target_norm = tgt_n
+                        if best_distance == 0:
+                            break
 
                 max_len = max(len(src_n), len(best_target_norm), 1)
                 similarity_score = int(round(100 * (1 - (best_distance / max_len))))
