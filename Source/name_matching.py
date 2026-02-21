@@ -5,8 +5,9 @@
 # Developed By Ambuj Kumar
 
 import re
+from collections import defaultdict
 from difflib import SequenceMatcher
-from typing import Iterable, Literal
+from typing import Callable, Iterable, Literal
 import pandas as pd
 
 MatchMethod = Literal["exact", "fuzzy", "levenshtein", "jaro_winkler", "soundex", "ai_advanced"]
@@ -196,6 +197,70 @@ def ai_advanced_score(a: str, b: str) -> int:
     return int(round(weighted))
 
 
+def _build_candidate_getter(target_normalized: list[str]) -> Callable[[str], list[int]]:
+    """
+    Return a fast candidate lookup function.
+
+    For small target lists we keep full-scan behavior to preserve exact ranking.
+    For larger lists we use blocking to avoid comparing every source to every target.
+    """
+    target_count = len(target_normalized)
+    if target_count <= 3000:
+        all_indices = list(range(target_count))
+        return lambda _src_n: all_indices
+
+    first_char_index: dict[str, list[int]] = defaultdict(list)
+    prefix_index: dict[str, list[int]] = defaultdict(list)
+    token_index: dict[str, list[int]] = defaultdict(list)
+    length_index: dict[int, list[int]] = defaultdict(list)
+    target_lengths = [len(name) for name in target_normalized]
+
+    for idx, tgt_n in enumerate(target_normalized):
+        length_index[len(tgt_n)].append(idx)
+        if not tgt_n:
+            continue
+        first_char_index[tgt_n[0]].append(idx)
+        prefix_index[tgt_n[:3]].append(idx)
+        for token in {tok for tok in tgt_n.split() if len(tok) >= 2}:
+            token_index[token].append(idx)
+
+    all_indices = list(range(target_count))
+
+    def get_candidates(src_n: str) -> list[int]:
+        if not src_n:
+            return all_indices
+
+        candidates: set[int] = set()
+        candidates.update(prefix_index.get(src_n[:3], []))
+        candidates.update(first_char_index.get(src_n[0], []))
+
+        src_tokens = [tok for tok in src_n.split() if len(tok) >= 2]
+        src_tokens.sort(key=len, reverse=True)
+        for token in src_tokens[:4]:
+            candidates.update(token_index.get(token, []))
+
+        src_len = len(src_n)
+        for length_val in range(max(0, src_len - 2), src_len + 3):
+            candidates.update(length_index.get(length_val, []))
+
+        if not candidates:
+            return all_indices
+
+        if len(candidates) > 2000:
+            ranked = sorted(
+                candidates,
+                key=lambda idx: (
+                    abs(target_lengths[idx] - src_len),
+                    0 if target_normalized[idx][:1] == src_n[:1] else 1,
+                ),
+            )
+            return ranked[:2000]
+
+        return list(candidates)
+
+    return get_candidates
+
+
 def match_names(
     source_names: Iterable[str],
     target_names: Iterable[str],
@@ -221,8 +286,7 @@ def match_names(
         right_map = dict(
             zip(right_lookup["target_normalized"], right_lookup["target_original"])
         )
-        for src in src_series:
-            src_n = normalize_name(src)
+        for src, src_n in zip(src_series, src_norm):
             matched = right_map.get(src_n)
             results.append(
                 {
@@ -235,29 +299,33 @@ def match_names(
             )
         return pd.DataFrame(results)
 
-    target_rows = list(
-        zip(right_lookup["target_original"], right_lookup["target_normalized"])
-    )
+    target_originals = right_lookup["target_original"].tolist()
+    target_normalized = right_lookup["target_normalized"].tolist()
+    get_candidates = _build_candidate_getter(target_normalized)
 
     if method == "fuzzy":
-        for src in src_series:
-            src_n = normalize_name(src)
-            best_name = ""
-            best_score = 0
-            for tgt_original, tgt_n in target_rows:
-                score = fuzzy_score(src_n, tgt_n)
-                if score > best_score:
-                    best_score = score
-                    best_name = tgt_original
-            results.append(
-                {
-                    "source_name": src,
+        best_cache: dict[str, dict] = {}
+        for src, src_n in zip(src_series, src_norm):
+            if src_n not in best_cache:
+                candidate_indices = get_candidates(src_n)
+                if not candidate_indices:
+                    candidate_indices = list(range(len(target_originals)))
+
+                best_name = ""
+                best_score = 0
+                for idx in candidate_indices:
+                    score = fuzzy_score(src_n, target_normalized[idx])
+                    if score > best_score:
+                        best_score = score
+                        best_name = target_originals[idx]
+                best_cache[src_n] = {
                     "source_normalized": src_n,
                     "matched_name": best_name,
                     "score": best_score,
                     "is_match": best_score >= fuzzy_threshold,
                 }
-            )
+
+            results.append({"source_name": src, **best_cache[src_n]})
         return pd.DataFrame(results)
 
     if method == "soundex":
@@ -266,8 +334,7 @@ def match_names(
         right_map = dict(
             zip(soundex_lookup["target_soundex"], soundex_lookup["target_original"])
         )
-        for src in src_series:
-            src_n = normalize_name(src)
+        for src, src_n in zip(src_series, src_norm):
             src_soundex = soundex_code(src_n)
             matched = right_map.get(src_soundex)
             results.append(
@@ -283,75 +350,106 @@ def match_names(
         return pd.DataFrame(results)
 
     if method == "jaro_winkler":
-        for src in src_series:
-            src_n = normalize_name(src)
-            best_name = ""
-            best_score = 0
-            for tgt_original, tgt_n in target_rows:
-                score = jaro_winkler_score(src_n, tgt_n)
-                if score > best_score:
-                    best_score = score
-                    best_name = tgt_original
-            results.append(
-                {
-                    "source_name": src,
+        best_cache = {}
+        for src, src_n in zip(src_series, src_norm):
+            if src_n not in best_cache:
+                candidate_indices = get_candidates(src_n)
+                if not candidate_indices:
+                    candidate_indices = list(range(len(target_originals)))
+
+                best_name = ""
+                best_score = 0
+                for idx in candidate_indices:
+                    score = jaro_winkler_score(src_n, target_normalized[idx])
+                    if score > best_score:
+                        best_score = score
+                        best_name = target_originals[idx]
+                best_cache[src_n] = {
                     "source_normalized": src_n,
                     "matched_name": best_name,
                     "score": best_score,
                     "is_match": best_score >= fuzzy_threshold,
                 }
-            )
+
+            results.append({"source_name": src, **best_cache[src_n]})
         return pd.DataFrame(results)
 
     if method == "levenshtein":
-        for src in src_series:
-            src_n = normalize_name(src)
-            best_name = ""
-            best_distance = 10**9
-            best_target_norm = ""
-            for tgt_original, tgt_n in target_rows:
-                dist = levenshtein_distance(src_n, tgt_n)
-                if dist < best_distance:
-                    best_distance = dist
-                    best_name = tgt_original
-                    best_target_norm = tgt_n
+        best_cache = {}
+        for src, src_n in zip(src_series, src_norm):
+            if src_n not in best_cache:
+                best_name = ""
+                best_distance = 10**9
+                best_target_norm = ""
 
-            max_len = max(len(src_n), len(best_target_norm), 1)
-            similarity_score = int(round(100 * (1 - (best_distance / max_len))))
-            results.append(
-                {
-                    "source_name": src,
+                candidate_indices = get_candidates(src_n)
+                if not candidate_indices:
+                    candidate_indices = list(range(len(target_originals)))
+
+                for idx in candidate_indices:
+                    tgt_n = target_normalized[idx]
+                    dist = levenshtein_distance(src_n, tgt_n)
+                    if dist < best_distance:
+                        best_distance = dist
+                        best_name = target_originals[idx]
+                        best_target_norm = tgt_n
+
+                max_len = max(len(src_n), len(best_target_norm), 1)
+                similarity_score = int(round(100 * (1 - (best_distance / max_len))))
+                best_cache[src_n] = {
                     "source_normalized": src_n,
                     "matched_name": best_name,
                     "distance": best_distance,
                     "score": similarity_score,
                     "is_match": best_distance <= lev_max_distance,
                 }
-            )
+
+            results.append({"source_name": src, **best_cache[src_n]})
         return pd.DataFrame(results)
 
     if method == "ai_advanced":
-        for src in src_series:
-            src_n = normalize_name(src)
-            best_name = ""
-            best_score = 0
-            best_fuzzy = 0
-            best_jaro = 0
-            best_token = 0
-            for tgt_original, tgt_n in target_rows:
-                fuzzy = fuzzy_score(src_n, tgt_n)
-                jaro = jaro_winkler_score(src_n, tgt_n)
-                token = token_set_score(src_n, tgt_n)
-                score = ai_advanced_score(src_n, tgt_n)
-                if score > best_score:
-                    best_score = score
-                    best_name = tgt_original
-                    best_fuzzy = fuzzy
-                    best_jaro = jaro
-                    best_token = token
-            results.append(
-                {
-                    "source_name": src,
+        best_cache = {}
+        for src, src_n in zip(src_series, src_norm):
+            if src_n not in best_cache:
+                candidate_indices = get_candidates(src_n)
+                if not candidate_indices:
+                    candidate_indices = list(range(len(target_originals)))
+
+                best_name = ""
+                best_score = 0
+                best_fuzzy = 0
+                best_jaro = 0
+                best_token = 0
+                for idx in candidate_indices:
+                    tgt_n = target_normalized[idx]
+                    fuzzy = fuzzy_score(src_n, tgt_n)
+                    jaro = jaro_winkler_score(src_n, tgt_n)
+                    token = token_set_score(src_n, tgt_n)
+                    score = int(
+                        round(
+                            max(
+                                0.0,
+                                min(
+                                    100.0,
+                                    (0.45 * jaro)
+                                    + (0.35 * fuzzy)
+                                    + (0.20 * token)
+                                    + (
+                                        5
+                                        if (src_n.split() and tgt_n.split() and src_n.split()[0] == tgt_n.split()[0])
+                                        else 0
+                                    ),
+                                ),
+                            )
+                        )
+                    )
+                    if score > best_score:
+                        best_score = score
+                        best_name = target_originals[idx]
+                        best_fuzzy = fuzzy
+                        best_jaro = jaro
+                        best_token = token
+                best_cache[src_n] = {
                     "source_normalized": src_n,
                     "matched_name": best_name,
                     "score": best_score,
@@ -360,7 +458,8 @@ def match_names(
                     "ai_token_score": best_token,
                     "is_match": best_score >= fuzzy_threshold,
                 }
-            )
+
+            results.append({"source_name": src, **best_cache[src_n]})
         return pd.DataFrame(results)
 
     raise ValueError(f"Unknown method: {method}")

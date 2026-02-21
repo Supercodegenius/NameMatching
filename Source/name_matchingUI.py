@@ -5,6 +5,7 @@
 # Developed By Ambuj Kumar
 
 import os
+from io import BytesIO
 
 import pandas as pd
 import streamlit as st
@@ -226,12 +227,23 @@ def _chat_system_prompt() -> str:
     )
 
 
+@st.cache_data(show_spinner=False)
+def _read_table_from_bytes(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    if filename.lower().endswith(".csv"):
+        return pd.read_csv(BytesIO(file_bytes))
+    return pd.read_excel(BytesIO(file_bytes))
+
+
+@st.cache_data(show_spinner=False)
+def _read_demo_csv(path: str, file_mtime: float) -> pd.DataFrame:
+    _ = file_mtime  # cache key includes mtime so updates invalidate cache
+    return pd.read_csv(path)
+
+
 def read_table(uploaded_file):
     if uploaded_file is None:
         return None
-    if uploaded_file.name.lower().endswith(".csv"):
-        return pd.read_csv(uploaded_file)
-    return pd.read_excel(uploaded_file)
+    return _read_table_from_bytes(uploaded_file.getvalue(), uploaded_file.name)
 
 
 @st.cache_data(show_spinner=False)
@@ -282,6 +294,7 @@ with st.sidebar:
     with st.expander("Advanced", expanded=False):
         show_previews = st.checkbox("Show data previews", value=True)
         show_only_matches = st.checkbox("Show only matched rows", value=False)
+        max_rows_to_render = st.slider("Rows to render in UI tables", 100, 5000, 1000, 100)
 
     with st.expander("Debug", expanded=False):
         st.caption(f"Loaded: `{_clean_display_path(__file__)}`")
@@ -309,8 +322,16 @@ with up_col2:
     right_file = st.file_uploader("Target file", type=["csv", "xlsx"])
 
 if use_demo_files:
-    left_df = pd.read_csv(DEMO_SOURCE_PATH) if os.path.exists(DEMO_SOURCE_PATH) else None
-    right_df = pd.read_csv(DEMO_TARGET_PATH) if os.path.exists(DEMO_TARGET_PATH) else None
+    left_df = (
+        _read_demo_csv(DEMO_SOURCE_PATH, os.path.getmtime(DEMO_SOURCE_PATH))
+        if os.path.exists(DEMO_SOURCE_PATH)
+        else None
+    )
+    right_df = (
+        _read_demo_csv(DEMO_TARGET_PATH, os.path.getmtime(DEMO_TARGET_PATH))
+        if os.path.exists(DEMO_TARGET_PATH)
+        else None
+    )
     st.success(f"Using demo files: `{DEMO_SOURCE_PATH}` and `{DEMO_TARGET_PATH}`")
 else:
     left_df = read_table(left_file)
@@ -372,7 +393,10 @@ if show_only_matches and "is_match" in full_result_df.columns:
     result_df = full_result_df[full_result_df["is_match"]].copy()
 
 st.subheader("Results")
-st.dataframe(result_df, use_container_width=True, height=420)
+result_df_view = result_df.head(int(max_rows_to_render))
+if len(result_df) > len(result_df_view):
+    st.caption(f"Showing first {len(result_df_view):,} of {len(result_df):,} rows for faster rendering.")
+st.dataframe(result_df_view, use_container_width=True, height=420)
 
 metric_col1, metric_col2, metric_col3 = st.columns(3)
 with metric_col1:
@@ -394,9 +418,9 @@ else:
     top_df = result_df.head(int(top_n))
 st.dataframe(top_df, use_container_width=True, height=320)
 
-csv_data = result_df.to_csv(index=False).encode("utf-8")
 is_premium_user = st.session_state.get("is_premium_user", False)
 if is_premium_user:
+    csv_data = result_df.to_csv(index=False).encode("utf-8")
     st.download_button(
         "Download Match Results (CSV)",
         data=csv_data,
