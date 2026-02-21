@@ -266,13 +266,13 @@ with st.sidebar:
                 "Soundex Match",
                 "Jaro-Winkler Distance Match",
                 "Levenshtein Match",
-                "AI Advance Matching",
+                "AI Advance Match",
             ],
         )
 
         threshold = 75
         lev_max_distance = 2
-        if method in {"Fuzzy Match", "Jaro-Winkler Distance Match", "AI Advance Matching"}:
+        if method in {"Fuzzy Match", "Jaro-Winkler Distance Match", "AI Advance Match"}:
             threshold = st.slider("Fuzzy threshold", 0, 100, 75, 1)
         if method == "Levenshtein Match":
             lev_max_distance = st.slider("Levenshtein max distance", 0, 10, 2, 1)
@@ -293,7 +293,7 @@ method_key = {
     "Soundex Match": "soundex",
     "Jaro-Winkler Distance Match": "jaro_winkler",
     "Levenshtein Match": "levenshtein",
-    "AI Advance Matching": "ai_advanced",
+    "AI Advance Match": "ai_advanced",
 }[method]
 
 st.subheader("1) Provide data")
