@@ -10,7 +10,6 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 
-from Source.name_matching import match_names
 
 
 st.set_page_config(page_title="Name Matching", layout="wide", initial_sidebar_state="expanded")
@@ -253,13 +252,17 @@ def run_matching(
     method_value: str,
     fuzzy_threshold: int,
     levenshtein_max_distance: int,
+    levenshtein_engine: str,
 ) -> pd.DataFrame:
+    from Source.name_matching import match_names
+
     return match_names(
         list(left_values),
         list(right_values),
         method=method_value,
         fuzzy_threshold=fuzzy_threshold,
         lev_max_distance=levenshtein_max_distance,
+        lev_engine=levenshtein_engine,
     )
 
 
@@ -284,10 +287,16 @@ with st.sidebar:
 
         threshold = 75
         lev_max_distance = 2
+        lev_engine = "auto"
         if method in {"Fuzzy Match", "Jaro-Winkler Distance Match", "AI Advance Match"}:
             threshold = st.slider("Fuzzy threshold", 0, 100, 75, 1)
         if method == "Levenshtein Match":
             lev_max_distance = st.slider("Levenshtein max distance", 0, 10, 2, 1)
+            lev_engine = st.selectbox(
+                "Levenshtein engine",
+                ["Auto", "RapidFuzz", "Python"],
+                help="Auto uses RapidFuzz when available, otherwise Python fallback.",
+            ).lower()
 
         top_n = st.slider("Top matches to show", 1, 25, 10, 1)
 
@@ -376,6 +385,7 @@ if run_now:
             method_key,
             int(threshold),
             int(lev_max_distance),
+            lev_engine,
         )
     has_results = True
 
@@ -511,6 +521,7 @@ if user_prompt:
             f"Method key: {method_key}",
             f"Fuzzy threshold: {int(threshold)}",
             f"Levenshtein max distance: {int(lev_max_distance)}",
+            f"Levenshtein engine: {lev_engine}",
             f"Top matches: {int(top_n)}",
             f"Show only matches: {bool(show_only_matches)}",
             f"Rows in result: {len(result_df)}",

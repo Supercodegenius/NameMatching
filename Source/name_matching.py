@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # Build with AI: AI-Powered Name Matching 
 # Dashboards with Streamlit
 # Name Matching Algorithms
@@ -7,10 +9,20 @@
 import re
 from collections import defaultdict
 from difflib import SequenceMatcher
-from typing import Callable, Iterable, Literal
-import pandas as pd
+from typing import TYPE_CHECKING, Callable, Iterable, Literal
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+try:
+    from rapidfuzz import distance as _rf_distance
+    from rapidfuzz import process as _rf_process
+except Exception:
+    _rf_distance = None
+    _rf_process = None
 
 MatchMethod = Literal["exact", "fuzzy", "levenshtein", "jaro_winkler", "soundex", "ai_advanced"]
+LevenshteinEngine = Literal["auto", "rapidfuzz", "python"]
 
 def normalize_name(value: str) -> str:
     """Normalize names for more reliable comparisons."""
@@ -110,39 +122,62 @@ def levenshtein_distance_bounded(a: str, b: str, max_dist: int) -> int:
     if abs(len_a - len_b) > max_dist:
         return max_dist + 1
 
-    # Keep the second dimension small.
     if len_a > len_b:
         a, b = b, a
         len_a, len_b = len_b, len_a
 
-    prev = list(range(len_b + 1))
+    inf = max_dist + 1
+
+    prev_start = 0
+    prev_end = min(len_b, max_dist)
+    prev = list(range(prev_start, prev_end + 1))
+
     for i in range(1, len_a + 1):
-        start = max(1, i - max_dist)
+        start = max(0, i - max_dist)
         end = min(len_b, i + max_dist)
-
-        curr = [max_dist + 1] * (len_b + 1)
-        curr[0] = i
-        row_min = max_dist + 1
-
-        if start > 1:
-            curr[start - 1] = max_dist + 1
-
+        curr = [inf] * (end - start + 1)
+        row_min = inf
         ai = a[i - 1]
+
         for j in range(start, end + 1):
-            cost = 0 if ai == b[j - 1] else 1
-            curr[j] = min(
-                prev[j] + 1,
-                curr[j - 1] + 1,
-                prev[j - 1] + cost,
-            )
-            if curr[j] < row_min:
-                row_min = curr[j]
+            curr_idx = j - start
+
+            if prev_start <= j <= prev_end:
+                delete_cost = prev[j - prev_start] + 1
+            else:
+                delete_cost = inf
+
+            if j == 0:
+                insert_cost = i
+            elif j - 1 >= start:
+                insert_cost = curr[curr_idx - 1] + 1
+            else:
+                insert_cost = inf
+
+            if prev_start <= j - 1 <= prev_end:
+                substitute_cost = prev[j - 1 - prev_start] + (0 if ai == b[j - 1] else 1)
+            else:
+                substitute_cost = inf
+
+            val = delete_cost if delete_cost < insert_cost else insert_cost
+            if substitute_cost < val:
+                val = substitute_cost
+
+            curr[curr_idx] = val
+            if val < row_min:
+                row_min = val
 
         if row_min > max_dist:
-            return max_dist + 1
-        prev = curr
+            return inf
 
-    return prev[len_b] if prev[len_b] <= max_dist else max_dist + 1
+        prev = curr
+        prev_start = start
+        prev_end = end
+
+    if prev_start <= len_b <= prev_end:
+        result = prev[len_b - prev_start]
+        return result if result <= max_dist else inf
+    return inf
 
 
 def jaro_similarity(a: str, b: str) -> float:
@@ -257,7 +292,7 @@ def _build_candidate_getter(target_normalized: list[str]) -> Callable[[str], lis
     Return a fast candidate lookup function.
 
     For small target lists we keep full-scan behavior to preserve exact ranking.
-    For larger lists we use blocking to avoid comparing every source to every target.
+    For larger lists we use lightweight blocking and bounded fallbacks.
     """
     target_count = len(target_normalized)
     if target_count <= 3000:
@@ -268,7 +303,6 @@ def _build_candidate_getter(target_normalized: list[str]) -> Callable[[str], lis
     prefix_index: dict[str, list[int]] = defaultdict(list)
     token_index: dict[str, list[int]] = defaultdict(list)
     length_index: dict[int, list[int]] = defaultdict(list)
-    target_lengths = [len(name) for name in target_normalized]
 
     for idx, tgt_n in enumerate(target_normalized):
         length_index[len(tgt_n)].append(idx)
@@ -281,37 +315,60 @@ def _build_candidate_getter(target_normalized: list[str]) -> Callable[[str], lis
 
     all_indices = list(range(target_count))
 
+    max_candidates = 400
+    max_pool = 800
+    max_bucket_take = 200
+
     def get_candidates(src_n: str) -> list[int]:
         if not src_n:
             return all_indices
 
-        candidates: set[int] = set()
-        candidates.update(prefix_index.get(src_n[:3], []))
-        candidates.update(first_char_index.get(src_n[0], []))
+        seen: set[int] = set()
+        ordered: list[int] = []
+
+        def add_indices(indices: list[int], limit: int | None = None) -> None:
+            if not indices:
+                return
+            added = 0
+            for idx in indices:
+                if idx in seen:
+                    continue
+                seen.add(idx)
+                ordered.append(idx)
+                added += 1
+                if len(ordered) >= max_pool:
+                    return
+                if limit is not None and added >= limit:
+                    return
+
+        add_indices(prefix_index.get(src_n[:3], []))
+        add_indices(first_char_index.get(src_n[:1], []))
 
         src_tokens = [tok for tok in src_n.split() if len(tok) >= 2]
         src_tokens.sort(key=len, reverse=True)
         for token in src_tokens[:4]:
-            candidates.update(token_index.get(token, []))
+            add_indices(token_index.get(token, []), max_bucket_take)
+            if len(ordered) >= max_pool:
+                break
 
         src_len = len(src_n)
-        for length_val in range(max(0, src_len - 2), src_len + 3):
-            candidates.update(length_index.get(length_val, []))
+        for delta in range(0, 3):
+            near_lengths = [src_len - delta] if delta == 0 else [src_len - delta, src_len + delta]
+            for length_val in near_lengths:
+                if length_val < 0:
+                    continue
+                add_indices(length_index.get(length_val, []), max_bucket_take)
+                if len(ordered) >= max_pool:
+                    break
+            if len(ordered) >= max_pool:
+                break
 
-        if not candidates:
+        if not ordered:
             return all_indices
 
-        if len(candidates) > 2000:
-            ranked = sorted(
-                candidates,
-                key=lambda idx: (
-                    abs(target_lengths[idx] - src_len),
-                    0 if target_normalized[idx][:1] == src_n[:1] else 1,
-                ),
-            )
-            return ranked[:2000]
-
-        return list(candidates)
+        if len(ordered) > max_candidates:
+            return ordered[:max_candidates]
+        return ordered
 
     return get_candidates
 
@@ -323,8 +380,11 @@ def match_names(
     method: MatchMethod,
     fuzzy_threshold: int = 75,
     lev_max_distance: int = 2,
+    lev_engine: LevenshteinEngine = "auto",
 ) -> pd.DataFrame:
     """Return match results for each source name against a target list."""
+    import pandas as pd
+
     src_series = pd.Series(list(source_names)).fillna("").astype(str)
     tgt_series = pd.Series(list(target_names)).fillna("").astype(str)
 
@@ -356,6 +416,7 @@ def match_names(
 
     target_originals = right_lookup["target_original"].tolist()
     target_normalized = right_lookup["target_normalized"].tolist()
+    target_exact_map = dict(zip(target_normalized, target_originals))
     get_candidates = _build_candidate_getter(target_normalized)
 
     if method == "fuzzy":
@@ -431,41 +492,70 @@ def match_names(
 
     if method == "levenshtein":
         best_cache = {}
+        all_indices = list(range(len(target_originals)))
+        use_rapidfuzz = (
+            lev_engine == "auto" and _rf_process is not None and _rf_distance is not None
+        ) or (lev_engine == "rapidfuzz" and _rf_process is not None and _rf_distance is not None)
         for src, src_n in zip(src_series, src_norm):
             if src_n not in best_cache:
+                exact_match = target_exact_map.get(src_n)
+                if exact_match is not None:
+                    best_cache[src_n] = {
+                        "source_normalized": src_n,
+                        "matched_name": exact_match,
+                        "distance": 0,
+                        "score": 100,
+                        "is_match": True,
+                    }
+                    results.append({"source_name": src, **best_cache[src_n]})
+                    continue
+
                 best_name = ""
                 best_distance = 10**9
                 best_target_norm = ""
 
                 candidate_indices = get_candidates(src_n)
                 if not candidate_indices:
-                    candidate_indices = list(range(len(target_originals)))
-                else:
-                    # Find close-length candidates first to tighten the upper bound early.
+                    candidate_indices = all_indices
+                elif len(candidate_indices) <= 256:
+                    # For small candidate sets, sort by length to tighten bounds quickly.
                     src_len = len(src_n)
                     candidate_indices = sorted(
                         candidate_indices,
                         key=lambda idx: abs(len(target_normalized[idx]) - src_len),
                     )
 
-                for idx in candidate_indices:
-                    tgt_n = target_normalized[idx]
-                    if best_distance != 10**9 and abs(len(src_n) - len(tgt_n)) >= best_distance:
-                        continue
-
-                    if best_distance == 10**9:
-                        dist = levenshtein_distance(src_n, tgt_n)
-                    else:
-                        dist = levenshtein_distance_bounded(src_n, tgt_n, best_distance - 1)
-                        if dist >= best_distance:
+                if use_rapidfuzz:
+                    candidate_names = [target_normalized[idx] for idx in candidate_indices]
+                    best_hit = _rf_process.extractOne(
+                        src_n,
+                        candidate_names,
+                        scorer=_rf_distance.Levenshtein.distance,
+                        processor=None,
+                    )
+                    if best_hit is not None:
+                        best_target_norm = best_hit[0]
+                        best_distance = int(best_hit[1])
+                        best_name = target_originals[candidate_indices[int(best_hit[2])]]
+                else:
+                    for idx in candidate_indices:
+                        tgt_n = target_normalized[idx]
+                        if best_distance != 10**9 and abs(len(src_n) - len(tgt_n)) >= best_distance:
                             continue
 
-                    if dist < best_distance:
-                        best_distance = dist
-                        best_name = target_originals[idx]
-                        best_target_norm = tgt_n
-                        if best_distance == 0:
-                            break
+                        if best_distance == 10**9:
+                            dist = levenshtein_distance(src_n, tgt_n)
+                        else:
+                            dist = levenshtein_distance_bounded(src_n, tgt_n, best_distance - 1)
+                            if dist >= best_distance:
+                                continue
+
+                        if dist < best_distance:
+                            best_distance = dist
+                            best_name = target_originals[idx]
+                            best_target_norm = tgt_n
+                            if best_distance == 0:
+                                break
 
                 max_len = max(len(src_n), len(best_target_norm), 1)
                 similarity_score = int(round(100 * (1 - (best_distance / max_len))))
