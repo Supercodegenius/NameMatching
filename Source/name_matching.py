@@ -16,9 +16,11 @@ if TYPE_CHECKING:
 
 try:
     from rapidfuzz import distance as _rf_distance
+    from rapidfuzz import fuzz as _rf_fuzz
     from rapidfuzz import process as _rf_process
 except Exception:
     _rf_distance = None
+    _rf_fuzz = None
     _rf_process = None
 
 MatchMethod = Literal["exact", "fuzzy", "levenshtein", "jaro_winkler", "soundex", "ai_advanced"]
@@ -34,6 +36,8 @@ def normalize_name(value: str) -> str:
 
 def fuzzy_score(a: str, b: str) -> int:
     """Return similarity score in [0, 100]."""
+    if _rf_fuzz is not None:
+        return int(round(_rf_fuzz.ratio(a, b)))
     return int(round(100 * SequenceMatcher(None, a, b).ratio()))
 
 
@@ -254,6 +258,8 @@ def jaro_winkler_similarity(a: str, b: str, *, prefix_scale: float = 0.1) -> flo
 
 def jaro_winkler_score(a: str, b: str) -> int:
     """Return Jaro-Winkler similarity score in [0, 100]."""
+    if _rf_distance is not None:
+        return int(round(100 * _rf_distance.JaroWinkler.similarity(a, b)))
     return int(round(100 * jaro_winkler_similarity(a, b)))
 
 
@@ -268,6 +274,20 @@ def token_set_score(a: str, b: str) -> int:
     overlap = len(left_tokens & right_tokens)
     total = len(left_tokens | right_tokens)
     return int(round(100 * (overlap / total)))
+
+
+def _token_set_score_from_sets(left_tokens: set[str], right_tokens: set[str]) -> int:
+    if not left_tokens and not right_tokens:
+        return 100
+    if not left_tokens or not right_tokens:
+        return 0
+    overlap = len(left_tokens & right_tokens)
+    total = len(left_tokens | right_tokens)
+    return int(round(100 * (overlap / total)))
+
+
+def _first_token(text: str) -> str:
+    return text.split(" ", 1)[0] if text else ""
 
 
 def ai_advanced_score(a: str, b: str) -> int:
@@ -572,12 +592,16 @@ def match_names(
 
     if method == "ai_advanced":
         best_cache = {}
+        target_first_tokens = [_first_token(name) for name in target_normalized]
+        target_token_sets = [set(name.split()) for name in target_normalized]
         for src, src_n in zip(src_series, src_norm):
             if src_n not in best_cache:
                 candidate_indices = get_candidates(src_n)
                 if not candidate_indices:
                     candidate_indices = list(range(len(target_originals)))
 
+                src_first_token = _first_token(src_n)
+                src_token_set = set(src_n.split())
                 best_name = ""
                 best_score = 0
                 best_fuzzy = 0
@@ -587,7 +611,7 @@ def match_names(
                     tgt_n = target_normalized[idx]
                     fuzzy = fuzzy_score(src_n, tgt_n)
                     jaro = jaro_winkler_score(src_n, tgt_n)
-                    token = token_set_score(src_n, tgt_n)
+                    token = _token_set_score_from_sets(src_token_set, target_token_sets[idx])
                     score = int(
                         round(
                             max(
@@ -597,11 +621,7 @@ def match_names(
                                     (0.45 * jaro)
                                     + (0.35 * fuzzy)
                                     + (0.20 * token)
-                                    + (
-                                        5
-                                        if (src_n.split() and tgt_n.split() and src_n.split()[0] == tgt_n.split()[0])
-                                        else 0
-                                    ),
+                                    + (5 if (src_first_token and src_first_token == target_first_tokens[idx]) else 0),
                                 ),
                             )
                         )

@@ -406,7 +406,21 @@ st.subheader("Results")
 result_df_view = result_df.head(int(max_rows_to_render))
 if len(result_df) > len(result_df_view):
     st.caption(f"Showing first {len(result_df_view):,} of {len(result_df):,} rows for faster rendering.")
-st.dataframe(result_df_view, use_container_width=True, height=420)
+
+
+def _style_matched_rows(df: pd.DataFrame):
+    if "is_match" not in df.columns:
+        return df
+
+    def _highlight_row(row: pd.Series) -> list[str]:
+        if bool(row.get("is_match", False)):
+            return ["background-color: #e8f5e9"] * len(row)
+        return [""] * len(row)
+
+    return df.style.apply(_highlight_row, axis=1)
+
+
+st.dataframe(_style_matched_rows(result_df_view), use_container_width=True, height=420)
 
 metric_col1, metric_col2, metric_col3 = st.columns(3)
 with metric_col1:
@@ -426,7 +440,7 @@ if "score" in result_df.columns:
     top_df = result_df.sort_values("score", ascending=False).head(int(top_n))
 else:
     top_df = result_df.head(int(top_n))
-st.dataframe(top_df, use_container_width=True, height=320)
+st.dataframe(_style_matched_rows(top_df), use_container_width=True, height=320)
 
 is_premium_user = st.session_state.get("is_premium_user", False)
 if is_premium_user:
