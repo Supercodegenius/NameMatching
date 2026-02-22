@@ -436,6 +436,7 @@ def match_names(
 
     target_originals = right_lookup["target_original"].tolist()
     target_normalized = right_lookup["target_normalized"].tolist()
+    target_lengths = [len(name) for name in target_normalized]
     target_exact_map = dict(zip(target_normalized, target_originals))
     get_candidates = _build_candidate_getter(target_normalized)
 
@@ -594,11 +595,33 @@ def match_names(
         best_cache = {}
         target_first_tokens = [_first_token(name) for name in target_normalized]
         target_token_sets = [set(name.split()) for name in target_normalized]
+        ai_shortlist_max = 120
         for src, src_n in zip(src_series, src_norm):
             if src_n not in best_cache:
                 candidate_indices = get_candidates(src_n)
                 if not candidate_indices:
                     candidate_indices = list(range(len(target_originals)))
+                elif len(candidate_indices) > ai_shortlist_max:
+                    if _rf_process is not None and _rf_fuzz is not None:
+                        candidate_names = [target_normalized[idx] for idx in candidate_indices]
+                        shortlist_hits = _rf_process.extract(
+                            src_n,
+                            candidate_names,
+                            scorer=_rf_fuzz.ratio,
+                            processor=None,
+                            limit=ai_shortlist_max,
+                        )
+                        candidate_indices = [candidate_indices[int(hit[2])] for hit in shortlist_hits]
+                    else:
+                        src_len = len(src_n)
+                        src_first_char = src_n[:1]
+                        candidate_indices = sorted(
+                            candidate_indices,
+                            key=lambda idx: (
+                                abs(target_lengths[idx] - src_len),
+                                0 if target_normalized[idx][:1] == src_first_char else 1,
+                            ),
+                        )[:ai_shortlist_max]
 
                 src_first_token = _first_token(src_n)
                 src_token_set = set(src_n.split())
