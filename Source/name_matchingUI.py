@@ -159,6 +159,14 @@ st.markdown(
       .stButton > button[kind="primary"]:hover {
         filter: brightness(1.03);
       }
+      .nm-footer {
+        margin-top: 1.2rem;
+        padding-top: 0.6rem;
+        border-top: 1px solid rgba(19, 43, 84, 0.2);
+        text-align: center;
+        color: #4e6180;
+        font-size: 0.86rem;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -442,20 +450,14 @@ else:
     top_df = result_df.head(int(top_n))
 st.dataframe(_style_matched_rows(top_df), use_container_width=True, height=320)
 
-is_premium_user = st.session_state.get("is_premium_user", False)
-if is_premium_user:
-    csv_data = result_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Download Match Results (CSV)",
-        data=csv_data,
-        file_name="name_match_results.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-else:
-    if st.button("Download Match Results (CSV)", use_container_width=True):
-        st.warning("Premium required: upgrade your plan to download match results.")
-        st.info("After payment, set `st.session_state['is_premium_user'] = True`.")
+csv_data = result_df.to_csv(index=False).encode("utf-8")
+st.download_button(
+    "Download Match Results (CSV)",
+    data=csv_data,
+    file_name="name_match_results.csv",
+    mime="text/csv",
+    use_container_width=True,
+)
 
 st.markdown('<div class="nm-chat-shell">', unsafe_allow_html=True)
 st.markdown(
@@ -565,3 +567,7 @@ if user_prompt:
             st.session_state["chat_messages"].append({"role": "assistant", "content": answer})
 
 st.markdown("</div>", unsafe_allow_html=True)
+st.markdown(
+    '<div class="nm-footer">&copy; 2026 braincal.com. All rights reserved</div>',
+    unsafe_allow_html=True,
+)
