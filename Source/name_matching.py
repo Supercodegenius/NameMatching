@@ -290,21 +290,34 @@ def _first_token(text: str) -> str:
     return text.split(" ", 1)[0] if text else ""
 
 
+def _ai_weighted_score(
+    fuzzy: int,
+    jaro: int,
+    token: int,
+    *,
+    first_token_bonus: bool,
+) -> int:
+    score = (0.45 * jaro) + (0.35 * fuzzy) + (0.20 * token)
+    if first_token_bonus:
+        score += 5
+    score = max(0.0, min(100.0, score))
+    return int(round(score))
+
+
 def ai_advanced_score(a: str, b: str) -> int:
     """Weighted hybrid score designed for robust person-name matching."""
     fuzzy = fuzzy_score(a, b)
     jaro = jaro_winkler_score(a, b)
     token = token_set_score(a, b)
 
-    weighted = (0.45 * jaro) + (0.35 * fuzzy) + (0.20 * token)
-
-    left_first = a.split()[0] if a.split() else ""
-    right_first = b.split()[0] if b.split() else ""
-    if left_first and left_first == right_first:
-        weighted += 5
-
-    weighted = max(0.0, min(100.0, weighted))
-    return int(round(weighted))
+    left_first = _first_token(a)
+    right_first = _first_token(b)
+    return _ai_weighted_score(
+        fuzzy,
+        jaro,
+        token,
+        first_token_bonus=bool(left_first and left_first == right_first),
+    )
 
 
 def _build_candidate_getter(target_normalized: list[str]) -> Callable[[str], list[int]]:
@@ -595,13 +608,30 @@ def match_names(
         best_cache = {}
         target_first_tokens = [_first_token(name) for name in target_normalized]
         target_token_sets = [set(name.split()) for name in target_normalized]
-        ai_shortlist_max = 120
+        ai_shortlist_max = 80
+        ai_large_shortlist_trigger = 100
+        ai_early_exit_score = 97
+        all_indices = list(range(len(target_originals)))
         for src, src_n in zip(src_series, src_norm):
             if src_n not in best_cache:
+                exact_match = target_exact_map.get(src_n)
+                if exact_match is not None:
+                    best_cache[src_n] = {
+                        "source_normalized": src_n,
+                        "matched_name": exact_match,
+                        "score": 100,
+                        "ai_fuzzy_score": 100,
+                        "ai_jaro_winkler_score": 100,
+                        "ai_token_score": 100,
+                        "is_match": True,
+                    }
+                    results.append({"source_name": src, **best_cache[src_n]})
+                    continue
+
                 candidate_indices = get_candidates(src_n)
                 if not candidate_indices:
-                    candidate_indices = list(range(len(target_originals)))
-                elif len(candidate_indices) > ai_shortlist_max:
+                    candidate_indices = all_indices
+                elif len(candidate_indices) > ai_large_shortlist_trigger:
                     if _rf_process is not None and _rf_fuzz is not None:
                         candidate_names = [target_normalized[idx] for idx in candidate_indices]
                         shortlist_hits = _rf_process.extract(
@@ -633,21 +663,20 @@ def match_names(
                 for idx in candidate_indices:
                     tgt_n = target_normalized[idx]
                     fuzzy = fuzzy_score(src_n, tgt_n)
-                    jaro = jaro_winkler_score(src_n, tgt_n)
+                    first_token_bonus = bool(
+                        src_first_token and src_first_token == target_first_tokens[idx]
+                    )
+                    max_possible = int(round((0.35 * fuzzy) + 65 + (5 if first_token_bonus else 0)))
+                    if max_possible <= best_score:
+                        continue
+
                     token = _token_set_score_from_sets(src_token_set, target_token_sets[idx])
-                    score = int(
-                        round(
-                            max(
-                                0.0,
-                                min(
-                                    100.0,
-                                    (0.45 * jaro)
-                                    + (0.35 * fuzzy)
-                                    + (0.20 * token)
-                                    + (5 if (src_first_token and src_first_token == target_first_tokens[idx]) else 0),
-                                ),
-                            )
-                        )
+                    jaro = jaro_winkler_score(src_n, tgt_n)
+                    score = _ai_weighted_score(
+                        fuzzy,
+                        jaro,
+                        token,
+                        first_token_bonus=first_token_bonus,
                     )
                     if score > best_score:
                         best_score = score
@@ -655,6 +684,8 @@ def match_names(
                         best_fuzzy = fuzzy
                         best_jaro = jaro
                         best_token = token
+                        if best_score >= ai_early_exit_score:
+                            break
                 best_cache[src_n] = {
                     "source_normalized": src_n,
                     "matched_name": best_name,
