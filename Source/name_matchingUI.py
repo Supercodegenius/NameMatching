@@ -420,11 +420,12 @@ if len(result_df) > len(result_df_view):
 
 
 def _style_matched_rows(df: pd.DataFrame):
-    if "is_match" not in df.columns:
+    match_col = "is_match" if "is_match" in df.columns else ("Is Match" if "Is Match" in df.columns else None)
+    if match_col is None:
         return df
 
     def _highlight_row(row: pd.Series) -> list[str]:
-        if bool(row.get("is_match", False)):
+        if bool(row.get(match_col, False)):
             return ["background-color: #e8f5e9"] * len(row)
         return [""] * len(row)
 
