@@ -455,19 +455,62 @@ def match_names(
 
     if method == "fuzzy":
         best_cache: dict[str, dict] = {}
+        all_indices = list(range(len(target_originals)))
+        use_rapidfuzz = _rf_process is not None and _rf_fuzz is not None
+        target_first_chars = [name[:1] for name in target_normalized]
+        fuzzy_shortlist_max = 250
+        fuzzy_large_shortlist_trigger = 350
         for src, src_n in zip(src_series, src_norm):
             if src_n not in best_cache:
+                exact_match = target_exact_map.get(src_n)
+                if exact_match is not None:
+                    best_cache[src_n] = {
+                        "source_normalized": src_n,
+                        "matched_name": exact_match,
+                        "score": 100,
+                        "is_match": True,
+                    }
+                    results.append({"source_name": src, **best_cache[src_n]})
+                    continue
+
                 candidate_indices = get_candidates(src_n)
                 if not candidate_indices:
-                    candidate_indices = list(range(len(target_originals)))
+                    candidate_indices = all_indices
+                elif (
+                    not use_rapidfuzz
+                    and len(candidate_indices) > fuzzy_large_shortlist_trigger
+                ):
+                    src_len = len(src_n)
+                    src_first_char = src_n[:1]
+                    candidate_indices = sorted(
+                        candidate_indices,
+                        key=lambda idx: (
+                            abs(target_lengths[idx] - src_len),
+                            0 if target_first_chars[idx] == src_first_char else 1,
+                        ),
+                    )[:fuzzy_shortlist_max]
 
                 best_name = ""
                 best_score = 0
-                for idx in candidate_indices:
-                    score = fuzzy_score(src_n, target_normalized[idx])
-                    if score > best_score:
-                        best_score = score
-                        best_name = target_originals[idx]
+                if use_rapidfuzz:
+                    candidate_names = [target_normalized[idx] for idx in candidate_indices]
+                    best_hit = _rf_process.extractOne(
+                        src_n,
+                        candidate_names,
+                        scorer=_rf_fuzz.ratio,
+                        processor=None,
+                    )
+                    if best_hit is not None:
+                        best_score = int(round(best_hit[1]))
+                        best_name = target_originals[candidate_indices[int(best_hit[2])]]
+                else:
+                    for idx in candidate_indices:
+                        score = fuzzy_score(src_n, target_normalized[idx])
+                        if score > best_score:
+                            best_score = score
+                            best_name = target_originals[idx]
+                            if best_score == 100:
+                                break
                 best_cache[src_n] = {
                     "source_normalized": src_n,
                     "matched_name": best_name,
@@ -501,19 +544,62 @@ def match_names(
 
     if method == "jaro_winkler":
         best_cache = {}
+        all_indices = list(range(len(target_originals)))
+        use_rapidfuzz = _rf_process is not None and _rf_distance is not None
+        target_first_chars = [name[:1] for name in target_normalized]
+        jw_shortlist_max = 250
+        jw_large_shortlist_trigger = 350
         for src, src_n in zip(src_series, src_norm):
             if src_n not in best_cache:
+                exact_match = target_exact_map.get(src_n)
+                if exact_match is not None:
+                    best_cache[src_n] = {
+                        "source_normalized": src_n,
+                        "matched_name": exact_match,
+                        "score": 100,
+                        "is_match": True,
+                    }
+                    results.append({"source_name": src, **best_cache[src_n]})
+                    continue
+
                 candidate_indices = get_candidates(src_n)
                 if not candidate_indices:
-                    candidate_indices = list(range(len(target_originals)))
+                    candidate_indices = all_indices
+                elif (
+                    not use_rapidfuzz
+                    and len(candidate_indices) > jw_large_shortlist_trigger
+                ):
+                    src_len = len(src_n)
+                    src_first_char = src_n[:1]
+                    candidate_indices = sorted(
+                        candidate_indices,
+                        key=lambda idx: (
+                            abs(target_lengths[idx] - src_len),
+                            0 if target_first_chars[idx] == src_first_char else 1,
+                        ),
+                    )[:jw_shortlist_max]
 
                 best_name = ""
                 best_score = 0
-                for idx in candidate_indices:
-                    score = jaro_winkler_score(src_n, target_normalized[idx])
-                    if score > best_score:
-                        best_score = score
-                        best_name = target_originals[idx]
+                if use_rapidfuzz:
+                    candidate_names = [target_normalized[idx] for idx in candidate_indices]
+                    best_hit = _rf_process.extractOne(
+                        src_n,
+                        candidate_names,
+                        scorer=_rf_distance.JaroWinkler.similarity,
+                        processor=None,
+                    )
+                    if best_hit is not None:
+                        best_score = int(round(100 * float(best_hit[1])))
+                        best_name = target_originals[candidate_indices[int(best_hit[2])]]
+                else:
+                    for idx in candidate_indices:
+                        score = jaro_winkler_score(src_n, target_normalized[idx])
+                        if score > best_score:
+                            best_score = score
+                            best_name = target_originals[idx]
+                            if best_score == 100:
+                                break
                 best_cache[src_n] = {
                     "source_normalized": src_n,
                     "matched_name": best_name,
