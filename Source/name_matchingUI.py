@@ -83,6 +83,9 @@ st.markdown(
         overflow: hidden;
         box-shadow: 0 6px 16px rgba(16, 40, 84, 0.08);
       }
+      div[data-testid="stDataFrame"] [role="columnheader"] {
+        font-weight: 700 !important;
+      }
       div[data-testid="stFileUploaderDropzone"] {
         background: linear-gradient(180deg, #f9fbff 0%, #f2f6fc 100%);
         border: 1px solid #aec0dc;
@@ -428,7 +431,15 @@ def _style_matched_rows(df: pd.DataFrame):
     return df.style.apply(_highlight_row, axis=1)
 
 
-st.dataframe(_style_matched_rows(result_df_view), use_container_width=True, height=420)
+def _to_display_columns(df: pd.DataFrame) -> pd.DataFrame:
+    return df.rename(columns=lambda col: str(col).replace("_", " ").title())
+
+
+st.dataframe(
+    _style_matched_rows(_to_display_columns(result_df_view)),
+    use_container_width=True,
+    height=420,
+)
 
 metric_col1, metric_col2, metric_col3 = st.columns(3)
 with metric_col1:
@@ -448,7 +459,11 @@ if "score" in result_df.columns:
     top_df = result_df.sort_values("score", ascending=False).head(int(top_n))
 else:
     top_df = result_df.head(int(top_n))
-st.dataframe(_style_matched_rows(top_df), use_container_width=True, height=320)
+st.dataframe(
+    _style_matched_rows(_to_display_columns(top_df)),
+    use_container_width=True,
+    height=320,
+)
 
 csv_data = result_df.to_csv(index=False).encode("utf-8")
 st.download_button(
