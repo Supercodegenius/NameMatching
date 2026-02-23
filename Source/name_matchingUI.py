@@ -1,4 +1,4 @@
-# Build with AI: AI-Powered Name Matching
+﻿# Build with AI: AI-Powered Name Matching
 # Dashboards with Streamlit
 # Name Matching UI Building with Streamlit and Python
 
@@ -10,11 +10,13 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 
+FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png.jpeg")
+
 
 
 st.set_page_config(
     page_title="Name Matching",
-    page_icon="🧠",
+    page_icon=FAVICON_PATH,
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -592,3 +594,4 @@ st.markdown(
     '<div class="nm-footer">&copy; 2026 braincal.com. All rights reserved</div>',
     unsafe_allow_html=True,
 )
+
