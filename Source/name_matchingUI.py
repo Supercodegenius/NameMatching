@@ -68,7 +68,7 @@ st.markdown(
         font-weight: 700;
         line-height: 1.15;
         white-space: nowrap;
-        animation: nm-rainbow-blink 1.4s linear infinite;
+        animation: nm-rainbow-blink 3.4s linear infinite;
       }
       .nm-powered-by a {
         color: inherit;
@@ -79,12 +79,13 @@ st.markdown(
       }
       @keyframes nm-rainbow-blink {
         0%   { color: #ff4d4d; opacity: 1; }
-        14%  { color: #ff9f43; opacity: 0.2; }
-        28%  { color: #ffe66d; opacity: 1; }
-        42%  { color: #2ed573; opacity: 0.2; }
-        56%  { color: #1e90ff; opacity: 1; }
-        70%  { color: #5352ed; opacity: 0.2; }
-        84%  { color: #a55eea; opacity: 1; }
+        58%  { color: #ff4d4d; opacity: 1; }
+        64%  { color: #ff9f43; opacity: 0.2; }
+        70%  { color: #ffe66d; opacity: 1; }
+        76%  { color: #2ed573; opacity: 0.2; }
+        82%  { color: #1e90ff; opacity: 1; }
+        88%  { color: #5352ed; opacity: 0.2; }
+        94%  { color: #a55eea; opacity: 1; }
         100% { color: #ff4d4d; opacity: 0.2; }
       }
       .nm-hero p {
