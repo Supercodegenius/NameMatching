@@ -177,6 +177,17 @@ st.markdown(
         color: #4e6180;
         font-size: 0.86rem;
       }
+      /* Hide Streamlit chrome/widgets (including bottom-right icon) */
+      #MainMenu,
+      header,
+      footer,
+      div[data-testid="stToolbar"],
+      div[data-testid="stDecoration"],
+      div[data-testid="stStatusWidget"] {
+        visibility: hidden;
+        height: 0;
+        position: fixed;
+      }
     </style>
     """,
     unsafe_allow_html=True,
