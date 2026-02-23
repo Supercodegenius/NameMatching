@@ -51,8 +51,41 @@ st.markdown(
       }
       .nm-hero h1 {
         margin: 0 0 0.2rem 0;
-        font-size: 2rem;
+        font-size: 1.45rem;
         color: #f7fbff;
+        line-height: 1.15;
+      }
+      .nm-hero-title-row {
+        display: flex;
+        align-items: baseline;
+        justify-content: flex-start;
+        gap: 0.45rem;
+        flex-wrap: nowrap;
+      }
+      .nm-powered-by {
+        color: #ff4d4d;
+        font-size: 1.45rem;
+        font-weight: 700;
+        line-height: 1.15;
+        white-space: nowrap;
+        animation: nm-rainbow-blink 1.4s linear infinite;
+      }
+      .nm-powered-by a {
+        color: inherit;
+        text-decoration: underline;
+      }
+      .nm-powered-by a:hover {
+        color: #ffffff;
+      }
+      @keyframes nm-rainbow-blink {
+        0%   { color: #ff4d4d; opacity: 1; }
+        14%  { color: #ff9f43; opacity: 0.2; }
+        28%  { color: #ffe66d; opacity: 1; }
+        42%  { color: #2ed573; opacity: 0.2; }
+        56%  { color: #1e90ff; opacity: 1; }
+        70%  { color: #5352ed; opacity: 0.2; }
+        84%  { color: #a55eea; opacity: 1; }
+        100% { color: #ff4d4d; opacity: 0.2; }
       }
       .nm-hero p {
         margin: 0;
@@ -196,7 +229,10 @@ st.markdown(
 st.markdown(
     """
     <div class="nm-hero">
-      <h1>AI Powered Name Matching</h1>
+      <div class="nm-hero-title-row">
+        <h1 style="margin:0;">AI Powered Name Matching</h1>
+        <div class="nm-powered-by">By BrainCal Tech Team <a href="https://braincal.com" target="_blank" rel="noopener noreferrer">https://braincal.com</a></div>
+      </div>
       <p>Enterprise-grade name matching with exact, fuzzy, Soundex, Jaro-Winkler, Levenshtein, and AI Advance methods.</p>
       <div class="nm-chip-row">
         <span class="nm-chip">Operational Data Quality</span>
