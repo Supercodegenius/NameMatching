@@ -651,6 +651,7 @@ def _apply_drag_layout(
 
 st.set_page_config(
     page_title="Daily Slot Dashboard",
+    page_icon=os.path.join(BASE_DIR, "assets", "favicon-braincal.png"),
     layout="wide",
 )
 
@@ -684,6 +685,20 @@ st.sidebar.markdown("""
     [data-testid="stSidebar"] .stButton > button {
         justify-content: flex-start !important;
         text-align: left !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+    <style>
+    [data-testid="stStatusWidget"],
+    [data-testid="stDecoration"],
+    #MainMenu,
+    footer {
+        visibility: visible !important;
+        opacity: 1 !important;
+        height: auto !important;
+        pointer-events: auto !important;
     }
     </style>
 """, unsafe_allow_html=True)
