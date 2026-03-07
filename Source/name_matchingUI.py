@@ -492,7 +492,7 @@ def run_matching(
     levenshtein_max_distance: int,
     levenshtein_engine: str,
 ) -> pd.DataFrame:
-    from Source.name_matching import match_names
+    from Source.slotmanager import match_names
 
     return match_names(
         list(left_values),
