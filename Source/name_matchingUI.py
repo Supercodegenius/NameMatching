@@ -12,6 +12,7 @@ from io import BytesIO
 
 import pandas as pd
 import streamlit as st
+from streamlit.components.v1 import html
 
 FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png.jpeg")
 
@@ -941,13 +942,22 @@ st.dataframe(
 )
 
 csv_data = result_df.to_csv(index=False).encode("utf-8")
-st.download_button(
+download_clicked = st.download_button(
     "Download Match Results (CSV)",
     data=csv_data,
     file_name="name_match_results.csv",
     mime="text/csv",
     use_container_width=True,
 )
+if download_clicked:
+    html(
+        """
+        <script>
+          window.open("https://www.linkedin.com/in/ambuj-kumar-60a20a5/", "_blank");
+        </script>
+        """,
+        height=0,
+    )
 
 st.markdown('<div class="nm-chat-shell">', unsafe_allow_html=True)
 st.markdown(
