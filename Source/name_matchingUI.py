@@ -5,6 +5,9 @@
 # Developed By Ambuj Kumar
 
 import os
+import json
+import sqlite3
+import xml.etree.ElementTree as ET
 from io import BytesIO
 
 import pandas as pd
@@ -248,6 +251,75 @@ st.markdown(
 BASE_DIR = os.path.dirname(__file__)
 DEMO_SOURCE_PATH = os.path.join(BASE_DIR, "demo_data", "source_names.csv")
 DEMO_TARGET_PATH = os.path.join(BASE_DIR, "demo_data", "target_names.csv")
+DATA_UPLOAD_DB_PATH = os.path.join(BASE_DIR, "data_upload.db")
+CONTROL_SETTINGS_XML_PATH = os.path.join(BASE_DIR, "control_settings.xml")
+
+CONTROL_REGISTRY = [
+    {"id": "data_upload_button", "type": "button", "label": "Data Upload"},
+    {"id": "data_preview_button", "type": "button", "label": "Data Preview"},
+    {"id": "run_name_matching_button", "type": "button", "label": "Run name matching"},
+    {"id": "clear_chat_button", "type": "button", "label": "Clear chat"},
+    {"id": "best_method_button", "type": "button", "label": "Best method?"},
+    {"id": "tune_threshold_button", "type": "button", "label": "Tune threshold"},
+    {"id": "explain_mismatch_button", "type": "button", "label": "Explain mismatch"},
+    {"id": "show_data_previews_checkbox", "type": "checkbox", "label": "Show data previews"},
+    {"id": "show_only_matches_checkbox", "type": "checkbox", "label": "Show only matched rows"},
+    {"id": "include_location_checkbox", "type": "checkbox", "label": "Include Location"},
+    {"id": "include_industry_checkbox", "type": "checkbox", "label": "Include Industry"},
+    {"id": "include_app_context_checkbox", "type": "checkbox", "label": "Include current app context"},
+]
+
+
+def _default_control_settings() -> dict[str, bool]:
+    return {control["id"]: True for control in CONTROL_REGISTRY}
+
+
+def _load_control_settings(xml_path: str = CONTROL_SETTINGS_XML_PATH) -> dict[str, bool]:
+    settings = _default_control_settings()
+    if not os.path.exists(xml_path):
+        return settings
+
+    try:
+        root = ET.parse(xml_path).getroot()
+    except Exception:
+        return settings
+
+    for control_elem in root.findall("control"):
+        control_id = control_elem.get("id", "").strip()
+        enabled_value = str(control_elem.get("enabled", "true")).strip().lower()
+        if control_id in settings:
+            settings[control_id] = enabled_value in {"1", "true", "yes", "on"}
+    return settings
+
+
+def _save_control_settings(settings: dict[str, bool], xml_path: str = CONTROL_SETTINGS_XML_PATH) -> None:
+    root = ET.Element("controls")
+    for control in CONTROL_REGISTRY:
+        control_id = control["id"]
+        ET.SubElement(
+            root,
+            "control",
+            attrib={
+                "id": control_id,
+                "type": control["type"],
+                "label": control["label"],
+                "enabled": "true" if bool(settings.get(control_id, True)) else "false",
+            },
+        )
+
+    tree = ET.ElementTree(root)
+    try:
+        ET.indent(tree, space="  ")
+    except AttributeError:
+        pass
+    tree.write(xml_path, encoding="utf-8", xml_declaration=True)
+
+
+control_settings = _load_control_settings()
+
+
+def _is_control_enabled(control_id: str) -> bool:
+    return bool(control_settings.get(control_id, True))
 
 
 def _file_mtime_iso(path: str) -> str:
@@ -311,6 +383,106 @@ def read_table(uploaded_file):
     return _read_table_from_bytes(uploaded_file.getvalue(), uploaded_file.name)
 
 
+def _init_data_upload_db(db_path: str) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS data_upload_batches (
+                upload_id TEXT PRIMARY KEY,
+                source_filename TEXT NOT NULL,
+                uploaded_at_utc TEXT NOT NULL,
+                row_count INTEGER NOT NULL,
+                column_count INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS data_upload_rows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                upload_id TEXT NOT NULL,
+                row_number INTEGER NOT NULL,
+                row_data_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS data_upload_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                upload_id TEXT NOT NULL,
+                source_column TEXT NOT NULL,
+                destination_column TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
+
+def _save_data_upload_to_db(
+    source_df: pd.DataFrame,
+    mapping_df: pd.DataFrame,
+    source_filename: str,
+    db_path: str = DATA_UPLOAD_DB_PATH,
+) -> tuple[str, int]:
+    _init_data_upload_db(db_path)
+    upload_id = pd.Timestamp.utcnow().strftime("upload_%Y%m%d%H%M%S%f")
+    upload_time = pd.Timestamp.utcnow().isoformat()
+
+    safe_source_df = source_df.astype(object).where(pd.notna(source_df), None)
+    row_payloads = [
+        (upload_id, idx + 1, json.dumps(record, ensure_ascii=True))
+        for idx, record in enumerate(safe_source_df.to_dict(orient="records"))
+    ]
+    mapping_payloads = [
+        (upload_id, str(row["Source Column"]), str(row["Destination Column"]))
+        for _, row in mapping_df.iterrows()
+    ]
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO data_upload_batches (
+                upload_id, source_filename, uploaded_at_utc, row_count, column_count
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (upload_id, source_filename, upload_time, len(source_df), len(source_df.columns)),
+        )
+        conn.executemany(
+            """
+            INSERT INTO data_upload_rows (upload_id, row_number, row_data_json)
+            VALUES (?, ?, ?)
+            """,
+            row_payloads,
+        )
+        conn.executemany(
+            """
+            INSERT INTO data_upload_mappings (upload_id, source_column, destination_column)
+            VALUES (?, ?, ?)
+            """,
+            mapping_payloads,
+        )
+        conn.commit()
+
+    return upload_id, len(row_payloads)
+
+
+def _compose_match_values(
+    df: pd.DataFrame,
+    primary_col: str,
+    extra_cols: list[str] | None = None,
+) -> pd.Series:
+    primary_values = df[primary_col].fillna("").astype(str).str.strip()
+    if not extra_cols:
+        return primary_values
+
+    combined_values = primary_values.copy()
+    for col_name in extra_cols:
+        col_values = df[col_name].fillna("").astype(str).str.strip()
+        combined_values = combined_values.where(col_values.eq(""), combined_values + " " + col_values)
+    return combined_values.str.replace(r"\s+", " ", regex=True).str.strip()
+
+
 @st.cache_data(show_spinner=False)
 def run_matching(
     left_values: tuple[str, ...],
@@ -333,6 +505,15 @@ def run_matching(
 
 
 with st.sidebar:
+    st.header("Menu")
+    sidebar_menu = st.radio(
+        "Go to",
+        ["Data Upload", "Name Matching", "Admin"],
+        index=1,
+        label_visibility="collapsed",
+    )
+    st.divider()
+
     st.header("Matching Settings")
     st.caption("Configure matching and provide data.")
 
@@ -367,8 +548,16 @@ with st.sidebar:
         top_n = st.slider("Top matches to show", 1, 25, 10, 1)
 
     with st.expander("Advanced", expanded=False):
-        show_previews = st.checkbox("Show data previews", value=True)
-        show_only_matches = st.checkbox("Show only matched rows", value=False)
+        show_previews = st.checkbox(
+            "Show data previews",
+            value=True,
+            disabled=not _is_control_enabled("show_data_previews_checkbox"),
+        )
+        show_only_matches = st.checkbox(
+            "Show only matched rows",
+            value=False,
+            disabled=not _is_control_enabled("show_only_matches_checkbox"),
+        )
         max_rows_to_render = st.slider("Rows to render in UI tables", 100, 5000, 1000, 100)
 
     with st.expander("Debug", expanded=False):
@@ -384,6 +573,139 @@ method_key = {
     "AI Advance Match": "ai_advanced",
 }[method]
 
+if sidebar_menu == "Data Upload":
+    st.subheader("Data Upload")
+    st.markdown("Select your source file to upload.")
+    source_upload_df = None
+    mapping_df = pd.DataFrame(columns=["Source Column", "Destination Column"])
+    preview_clicked = False
+    uploaded_source_file = st.file_uploader(
+        "Source file selector",
+        type=["csv", "xlsx"],
+        key="data_upload_source_file",
+    )
+    if uploaded_source_file is not None:
+        source_upload_df = read_table(uploaded_source_file)
+        if source_upload_df is None:
+            st.warning("Could not read the selected file.")
+        else:
+            file_col, preview_col = st.columns([4, 1], gap="small")
+            with file_col:
+                st.success(f"Selected: `{uploaded_source_file.name}`")
+            with preview_col:
+                preview_clicked = st.button(
+                    "Data Preview",
+                    use_container_width=True,
+                    disabled=not _is_control_enabled("data_preview_button"),
+                )
+
+            if preview_clicked:
+                with st.expander("Uploaded Data Preview", expanded=True):
+                    st.dataframe(source_upload_df.head(100), use_container_width=True, height=320)
+
+            st.markdown("### Source and Destination Column Mapping")
+            st.caption("Map each source column to a destination column using dropdowns.")
+
+            source_columns = [str(col) for col in source_upload_df.columns.tolist()]
+            header_col1, header_col2 = st.columns(2, gap="small")
+            with header_col1:
+                st.markdown("**Source Columns**")
+            with header_col2:
+                st.markdown("**Destination Columns**")
+
+            mapped_rows: list[dict[str, str]] = []
+            for idx, default_source in enumerate(source_columns):
+                row_col1, row_col2 = st.columns(2, gap="small")
+                with row_col1:
+                    selected_source = st.selectbox(
+                        f"Source Column {idx + 1}",
+                        options=source_columns,
+                        index=idx,
+                        key=f"data_upload_source_col_{idx}",
+                        label_visibility="collapsed",
+                    )
+                with row_col2:
+                    default_dest_index = (
+                        source_columns.index(default_source)
+                        if default_source in source_columns
+                        else 0
+                    )
+                    selected_destination = st.selectbox(
+                        f"Destination Column {idx + 1}",
+                        options=source_columns,
+                        index=default_dest_index,
+                        key=f"data_upload_dest_col_{idx}",
+                        label_visibility="collapsed",
+                    )
+                mapped_rows.append(
+                    {
+                        "Source Column": selected_source,
+                        "Destination Column": selected_destination,
+                    }
+                )
+
+            mapping_df = pd.DataFrame(mapped_rows)
+            st.session_state["data_upload_column_mapping"] = mapping_df
+    else:
+        st.info("Choose a CSV/XLSX file.")
+
+    upload_button_clicked = st.button(
+        "Data Upload",
+        type="primary",
+        use_container_width=True,
+        disabled=(
+            uploaded_source_file is None
+            or source_upload_df is None
+            or not _is_control_enabled("data_upload_button")
+        ),
+    )
+    if upload_button_clicked and uploaded_source_file is not None and source_upload_df is not None:
+        with st.spinner("Saving uploaded data to DB..."):
+            upload_id, saved_row_count = _save_data_upload_to_db(
+                source_upload_df,
+                mapping_df,
+                uploaded_source_file.name,
+            )
+        st.success(
+            f"Data uploaded to DB successfully. Upload ID: `{upload_id}`. "
+            f"Saved rows: {saved_row_count}. DB: `{DATA_UPLOAD_DB_PATH}`"
+        )
+
+    st.markdown("Switch to **Name Matching** from the left menu to run matching.")
+    st.stop()
+
+if sidebar_menu == "Admin":
+    st.subheader("Admin")
+    st.caption("Enable or disable app buttons and checkboxes, then save to XML.")
+
+    button_controls = [c for c in CONTROL_REGISTRY if c["type"] == "button"]
+    checkbox_controls = [c for c in CONTROL_REGISTRY if c["type"] == "checkbox"]
+    updated_settings = dict(control_settings)
+
+    st.markdown("### Buttons")
+    for control in button_controls:
+        updated_settings[control["id"]] = st.checkbox(
+            control["label"],
+            value=bool(control_settings.get(control["id"], True)),
+            key=f"admin_control_{control['id']}",
+        )
+
+    st.markdown("### Checkboxes")
+    for control in checkbox_controls:
+        updated_settings[control["id"]] = st.checkbox(
+            control["label"],
+            value=bool(control_settings.get(control["id"], True)),
+            key=f"admin_control_{control['id']}",
+        )
+
+    save_admin_controls = st.button("Save Admin Settings", type="primary", use_container_width=True)
+    if save_admin_controls:
+        _save_control_settings(updated_settings)
+        st.success(f"Settings saved to `{CONTROL_SETTINGS_XML_PATH}`")
+        st.rerun()
+
+    st.stop()
+
 st.subheader("1) Provide data")
 st.markdown(
     '<div class="nm-muted">Upload two files (CSV/XLSX) or use the built-in demo files from the sidebar.</div>',
@@ -394,7 +716,7 @@ up_col1, up_col2 = st.columns(2, gap="large")
 with up_col1:
     left_file = st.file_uploader("Source file", type=["csv", "xlsx"])
 with up_col2:
-    right_file = st.file_uploader("Target file", type=["csv", "xlsx"])
+    right_file = st.file_uploader("Reference File", type=["csv", "xlsx"])
 
 if use_demo_files:
     left_df = (
@@ -427,7 +749,23 @@ if show_previews:
             with st.expander("Preview: Target", expanded=False):
                 st.dataframe(right_df.head(25), use_container_width=True, height=280)
 
-st.subheader("2) Choose columns")
+choose_col_header, choose_col_toggle = st.columns([3, 2], gap="small")
+with choose_col_header:
+    st.subheader("2) Choose columns")
+with choose_col_toggle:
+    include_location = st.checkbox(
+        "Include Location",
+        value=False,
+        help="Append the location column to the primary name before matching when available.",
+        disabled=not _is_control_enabled("include_location_checkbox"),
+    )
+    include_industry = st.checkbox(
+        "Include Industry",
+        value=False,
+        help="Append the industry column to the primary name before matching when available.",
+        disabled=not _is_control_enabled("include_industry_checkbox"),
+    )
+
 col_sel_left, col_sel_right = st.columns(2, gap="large")
 with col_sel_left:
     left_default = left_df.columns.tolist().index("full_name") if "full_name" in left_df.columns else 0
@@ -436,11 +774,92 @@ with col_sel_right:
     right_default = right_df.columns.tolist().index("name_in_system") if "name_in_system" in right_df.columns else 0
     right_name_col = st.selectbox("Target name column", options=right_df.columns.tolist(), index=right_default)
 
-left_names = left_df[left_name_col].fillna("").astype(str)
-right_names = right_df[right_name_col].fillna("").astype(str)
+left_location_col: str | None = None
+right_location_col: str | None = None
+left_industry_col: str | None = None
+right_industry_col: str | None = None
+
+if include_location:
+    location_left, location_right = st.columns(2, gap="large")
+    with location_left:
+        left_location_options = [c for c in left_df.columns.tolist() if c != left_name_col]
+        if left_location_options:
+            left_location_default = (
+                left_location_options.index("location") if "location" in left_location_options else 0
+            )
+            left_location_col = st.selectbox(
+                "Source location column",
+                options=left_location_options,
+                index=left_location_default,
+            )
+        else:
+            st.caption("No source columns available for location selection.")
+    with location_right:
+        right_location_options = [c for c in right_df.columns.tolist() if c != right_name_col]
+        if right_location_options:
+            right_location_default = (
+                right_location_options.index("location") if "location" in right_location_options else 0
+            )
+            right_location_col = st.selectbox(
+                "Target location column",
+                options=right_location_options,
+                index=right_location_default,
+            )
+        else:
+            st.caption("No target columns available for location selection.")
+
+if include_industry:
+    industry_left, industry_right = st.columns(2, gap="large")
+    with industry_left:
+        left_industry_options = [c for c in left_df.columns.tolist() if c != left_name_col]
+        if left_industry_options:
+            left_industry_default = (
+                left_industry_options.index("industry") if "industry" in left_industry_options else 0
+            )
+            left_industry_col = st.selectbox(
+                "Source industry column",
+                options=left_industry_options,
+                index=left_industry_default,
+            )
+        else:
+            st.caption("No source columns available for industry selection.")
+    with industry_right:
+        right_industry_options = [c for c in right_df.columns.tolist() if c != right_name_col]
+        if right_industry_options:
+            right_industry_default = (
+                right_industry_options.index("industry") if "industry" in right_industry_options else 0
+            )
+            right_industry_col = st.selectbox(
+                "Target industry column",
+                options=right_industry_options,
+                index=right_industry_default,
+            )
+        else:
+            st.caption("No target columns available for industry selection.")
+
+left_extra_cols: list[str] = []
+right_extra_cols: list[str] = []
+if include_location and left_location_col and left_location_col != left_name_col:
+    left_extra_cols.append(left_location_col)
+if include_location and right_location_col and right_location_col != right_name_col:
+    right_extra_cols.append(right_location_col)
+if include_industry and left_industry_col and left_industry_col != left_name_col:
+    if left_industry_col not in left_extra_cols:
+        left_extra_cols.append(left_industry_col)
+if include_industry and right_industry_col and right_industry_col != right_name_col:
+    if right_industry_col not in right_extra_cols:
+        right_extra_cols.append(right_industry_col)
+
+left_names = _compose_match_values(left_df, left_name_col, left_extra_cols)
+right_names = _compose_match_values(right_df, right_name_col, right_extra_cols)
 
 st.subheader("3) Run name matching")
-run_now = st.button("Run name matching", type="primary", use_container_width=True)
+run_now = st.button(
+    "Run name matching",
+    type="primary",
+    use_container_width=True,
+    disabled=not _is_control_enabled("run_name_matching_button"),
+)
 
 has_results = "result_df" in st.session_state
 if run_now:
@@ -550,9 +969,17 @@ with settings_col:
     with st.expander("Assistant settings", expanded=False):
         chat_model = st.text_input("Model", value="gpt-4o-mini")
         chat_temperature = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
-        include_app_context = st.checkbox("Include current app context", value=True)
+        include_app_context = st.checkbox(
+            "Include current app context",
+            value=True,
+            disabled=not _is_control_enabled("include_app_context_checkbox"),
+        )
 with clear_col:
-    clear_chat = st.button("Clear chat", use_container_width=True)
+    clear_chat = st.button(
+        "Clear chat",
+        use_container_width=True,
+        disabled=not _is_control_enabled("clear_chat_button"),
+    )
 
 if "chat_messages" not in st.session_state:
     st.session_state["chat_messages"] = [
@@ -570,11 +997,23 @@ if clear_chat:
 
 st.markdown('<div class="nm-chat-quick">Quick prompts</div>', unsafe_allow_html=True)
 prompt_col1, prompt_col2, prompt_col3 = st.columns(3, gap="small")
-if prompt_col1.button("Best method?", use_container_width=True):
+if prompt_col1.button(
+    "Best method?",
+    use_container_width=True,
+    disabled=not _is_control_enabled("best_method_button"),
+):
     st.session_state["quick_prompt"] = "Which method is best for messy customer names?"
-if prompt_col2.button("Tune threshold", use_container_width=True):
+if prompt_col2.button(
+    "Tune threshold",
+    use_container_width=True,
+    disabled=not _is_control_enabled("tune_threshold_button"),
+):
     st.session_state["quick_prompt"] = "How should I tune the threshold to reduce false positives?"
-if prompt_col3.button("Explain mismatch", use_container_width=True):
+if prompt_col3.button(
+    "Explain mismatch",
+    use_container_width=True,
+    disabled=not _is_control_enabled("explain_mismatch_button"),
+):
     st.session_state["quick_prompt"] = "Why might two similar names fail to match?"
 
 for msg in st.session_state["chat_messages"]:
@@ -610,6 +1049,8 @@ if user_prompt:
             f"Levenshtein max distance: {int(lev_max_distance)}",
             f"Levenshtein engine: {lev_engine}",
             f"Top matches: {int(top_n)}",
+            f"Optional source columns: {', '.join(left_extra_cols) if left_extra_cols else 'None'}",
+            f"Optional target columns: {', '.join(right_extra_cols) if right_extra_cols else 'None'}",
             f"Show only matches: {bool(show_only_matches)}",
             f"Rows in result: {len(result_df)}",
         ]
