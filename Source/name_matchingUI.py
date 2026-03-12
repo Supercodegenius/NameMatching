@@ -278,11 +278,13 @@ def _default_control_settings() -> dict[str, bool]:
 def _load_control_settings(xml_path: str = CONTROL_SETTINGS_XML_PATH) -> dict[str, bool]:
     settings = _default_control_settings()
     if not os.path.exists(xml_path):
+        _save_control_settings(settings, xml_path)
         return settings
 
     try:
         root = ET.parse(xml_path).getroot()
     except Exception:
+        _save_control_settings(settings, xml_path)
         return settings
 
     for control_elem in root.findall("control"):
