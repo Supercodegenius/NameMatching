@@ -613,6 +613,7 @@ def match_names(
     if method == "levenshtein":
         best_cache = {}
         all_indices = list(range(len(target_originals)))
+        lev_fallback_max = 80
         use_rapidfuzz = (
             lev_engine == "auto" and _rf_process is not None and _rf_distance is not None
         ) or (lev_engine == "rapidfuzz" and _rf_process is not None and _rf_distance is not None)
@@ -645,19 +646,50 @@ def match_names(
                         key=lambda idx: abs(len(target_normalized[idx]) - src_len),
                     )
 
+                # For large datasets, use the max distance to filter candidates early.
+                src_len = len(src_n)
+                distance_cutoff = None
+                if lev_max_distance is not None and lev_max_distance >= 0 and candidate_indices:
+                    filtered = [
+                        idx
+                        for idx in candidate_indices
+                        if abs(target_lengths[idx] - src_len) <= lev_max_distance
+                    ]
+                    if filtered:
+                        candidate_indices = filtered
+                        distance_cutoff = lev_max_distance
+                    else:
+                        # Fall back to a small length-based shortlist to keep things fast.
+                        candidate_indices = sorted(
+                            candidate_indices,
+                            key=lambda idx: abs(target_lengths[idx] - src_len),
+                        )[:lev_fallback_max]
+
                 if use_rapidfuzz:
                     candidate_names = [target_normalized[idx] for idx in candidate_indices]
-                    best_hit = _rf_process.extractOne(
-                        src_n,
-                        candidate_names,
-                        scorer=_rf_distance.Levenshtein.distance,
-                        processor=None,
-                    )
+                    best_hit = None
+                    if candidate_names:
+                        best_hit = _rf_process.extractOne(
+                            src_n,
+                            candidate_names,
+                            scorer=_rf_distance.Levenshtein.distance,
+                            processor=None,
+                            score_cutoff=distance_cutoff,
+                        )
+                        if best_hit is None and distance_cutoff is not None:
+                            best_hit = _rf_process.extractOne(
+                                src_n,
+                                candidate_names,
+                                scorer=_rf_distance.Levenshtein.distance,
+                                processor=None,
+                            )
                     if best_hit is not None:
                         best_target_norm = best_hit[0]
                         best_distance = int(best_hit[1])
                         best_name = target_originals[candidate_indices[int(best_hit[2])]]
                 else:
+                    if distance_cutoff is not None:
+                        best_distance = distance_cutoff + 1
                     for idx in candidate_indices:
                         tgt_n = target_normalized[idx]
                         if best_distance != 10**9 and abs(len(src_n) - len(tgt_n)) >= best_distance:
@@ -676,6 +708,17 @@ def match_names(
                             best_target_norm = tgt_n
                             if best_distance == 0:
                                 break
+                    if best_name == "" and distance_cutoff is not None and candidate_indices:
+                        best_distance = 10**9
+                        for idx in candidate_indices:
+                            tgt_n = target_normalized[idx]
+                            dist = levenshtein_distance(src_n, tgt_n)
+                            if dist < best_distance:
+                                best_distance = dist
+                                best_name = target_originals[idx]
+                                best_target_norm = tgt_n
+                                if best_distance == 0:
+                                    break
 
                 max_len = max(len(src_n), len(best_target_norm), 1)
                 similarity_score = int(round(100 * (1 - (best_distance / max_len))))
