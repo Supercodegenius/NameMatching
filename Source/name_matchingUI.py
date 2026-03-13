@@ -723,9 +723,9 @@ st.markdown(
 
 up_col1, up_col2 = st.columns(2, gap="large")
 with up_col1:
-    left_file = st.file_uploader("Source file", type=["csv", "xlsx"])
+    left_file = st.file_uploader("**Source file**", type=["csv", "xlsx"])
 with up_col2:
-    right_file = st.file_uploader("Reference File", type=["csv", "xlsx"])
+    right_file = st.file_uploader("**Reference File**", type=["csv", "xlsx"])
 
 if use_demo_files:
     left_df = (
