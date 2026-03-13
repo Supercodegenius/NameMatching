@@ -901,7 +901,6 @@ result_df = full_result_df
 if show_only_matches and "is_match" in full_result_df.columns:
     result_df = full_result_df[full_result_df["is_match"]].copy()
 
-st.subheader("Results")
 result_df_view = result_df.head(int(max_rows_to_render))
 if len(result_df) > len(result_df_view):
     st.caption(f"Showing first {len(result_df_view):,} of {len(result_df):,} rows for faster rendering.")
