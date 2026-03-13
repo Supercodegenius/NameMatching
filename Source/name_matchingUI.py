@@ -943,8 +943,8 @@ with metric_col3:
         match_rate = 0.0
     st.metric("Match rate", f"{match_rate:.1f}%")
 
-st.subheader("Top potential matches")
 st.markdown('<div id="top-matches-section"></div>', unsafe_allow_html=True)
+st.subheader("Top potential matches")
 if "score" in result_df.columns:
     top_df = result_df.sort_values("score", ascending=False).head(int(top_n))
 else:
@@ -959,10 +959,13 @@ if st.session_state.pop("scroll_to_top_matches", False):
     html(
         """
         <script>
-          const el = window.parent.document.getElementById("top-matches-section");
-          if (el && el.scrollIntoView) {
-            el.scrollIntoView({behavior: "smooth", block: "start"});
-          }
+          const scrollToMatches = () => {
+            const el = window.parent.document.getElementById("top-matches-section");
+            if (el && el.scrollIntoView) {
+              el.scrollIntoView({behavior: "smooth", block: "start"});
+            }
+          };
+          setTimeout(scrollToMatches, 120);
         </script>
         """,
         height=0,
