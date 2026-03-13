@@ -709,11 +709,16 @@ if sidebar_menu == "Admin":
 
     st.stop()
 
-st.subheader("1) Provide data")
-st.markdown(
-    '<div class="nm-muted">Upload two files (CSV/XLSX) or use the built-in demo files from the sidebar.</div>',
-    unsafe_allow_html=True,
-)
+header_col, caption_col = st.columns([1, 3], gap="small")
+with header_col:
+    st.subheader("Provide data")
+with caption_col:
+    st.markdown(
+        '<div class="nm-muted" style="padding-top: 0.55rem;">'
+        "Upload two files (CSV/XLSX) or use the built-in demo files from the sidebar."
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 up_col1, up_col2 = st.columns(2, gap="large")
 with up_col1:
