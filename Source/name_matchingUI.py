@@ -863,7 +863,6 @@ if include_industry and right_industry_col and right_industry_col != right_name_
 left_names = _compose_match_values(left_df, left_name_col, left_extra_cols)
 right_names = _compose_match_values(right_df, right_name_col, right_extra_cols)
 
-st.markdown('<div id="run-matching-section"></div>', unsafe_allow_html=True)
 run_header_col, run_button_col = st.columns([3, 1.4], gap="small")
 with run_header_col:
     st.subheader("Run name matching")
@@ -886,7 +885,7 @@ if run_now:
             int(lev_max_distance),
             lev_engine,
         )
-    st.session_state["scroll_to_run"] = True
+    st.session_state["scroll_to_top_matches"] = True
     has_results = True
 
 if not has_results:
@@ -897,19 +896,6 @@ full_result_df = st.session_state.get("result_df")
 if full_result_df is None:
     st.info("No results available yet. Run matching again.")
     st.stop()
-
-if st.session_state.pop("scroll_to_run", False):
-    html(
-        """
-        <script>
-          const el = window.parent.document.getElementById("run-matching-section");
-          if (el && el.scrollIntoView) {
-            el.scrollIntoView({behavior: "smooth", block: "start"});
-          }
-        </script>
-        """,
-        height=0,
-    )
 
 result_df = full_result_df
 if show_only_matches and "is_match" in full_result_df.columns:
@@ -958,6 +944,7 @@ with metric_col3:
     st.metric("Match rate", f"{match_rate:.1f}%")
 
 st.subheader("Top potential matches")
+st.markdown('<div id="top-matches-section"></div>', unsafe_allow_html=True)
 if "score" in result_df.columns:
     top_df = result_df.sort_values("score", ascending=False).head(int(top_n))
 else:
@@ -967,6 +954,19 @@ st.dataframe(
     use_container_width=True,
     height=320,
 )
+
+if st.session_state.pop("scroll_to_top_matches", False):
+    html(
+        """
+        <script>
+          const el = window.parent.document.getElementById("top-matches-section");
+          if (el && el.scrollIntoView) {
+            el.scrollIntoView({behavior: "smooth", block: "start"});
+          }
+        </script>
+        """,
+        height=0,
+    )
 
 csv_data = result_df.to_csv(index=False).encode("utf-8")
 download_clicked = st.download_button(
