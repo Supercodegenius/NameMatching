@@ -863,13 +863,16 @@ if include_industry and right_industry_col and right_industry_col != right_name_
 left_names = _compose_match_values(left_df, left_name_col, left_extra_cols)
 right_names = _compose_match_values(right_df, right_name_col, right_extra_cols)
 
-st.subheader("3) Run name matching")
-run_now = st.button(
-    "Run name matching",
-    type="primary",
-    use_container_width=True,
-    disabled=not _is_control_enabled("run_name_matching_button"),
-)
+run_header_col, run_button_col = st.columns([3, 1.4], gap="small")
+with run_header_col:
+    st.subheader("Run name matching")
+with run_button_col:
+    run_now = st.button(
+        "Run name matching",
+        type="primary",
+        use_container_width=True,
+        disabled=not _is_control_enabled("run_name_matching_button"),
+    )
 
 has_results = "result_df" in st.session_state
 if run_now:
