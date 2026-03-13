@@ -758,16 +758,17 @@ if show_previews:
             with st.expander("Preview: Target", expanded=False):
                 st.dataframe(right_df.head(25), use_container_width=True, height=280)
 
-choose_col_header, choose_col_toggle = st.columns([3, 2], gap="small")
+choose_col_header, include_loc_col, include_ind_col = st.columns([3, 1.4, 1.4], gap="small")
 with choose_col_header:
-    st.subheader("2) Choose columns")
-with choose_col_toggle:
+    st.subheader("Choose columns")
+with include_loc_col:
     include_location = st.checkbox(
         "Include Location",
         value=False,
         help="Append the location column to the primary name before matching when available.",
         disabled=not _is_control_enabled("include_location_checkbox"),
     )
+with include_ind_col:
     include_industry = st.checkbox(
         "Include Industry",
         value=False,
