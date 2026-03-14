@@ -208,6 +208,15 @@ st.markdown(
       div[data-testid="stSidebar"] div[role="radiogroup"] input:checked + div {
         color: #ffffff !important;
       }
+      div[data-testid="stSidebar"] .stButton > button {
+        justify-content: flex-start;
+        text-align: left;
+        padding-left: 1rem;
+      }
+      div[data-testid="stSidebar"] .stButton > button span {
+        width: 100%;
+        text-align: left;
+      }
       .nm-chat-quick {
         margin-top: 0.35rem;
         margin-bottom: 0.25rem;
