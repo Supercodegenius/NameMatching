@@ -532,14 +532,19 @@ with st.sidebar:
         "Name Matching": "🔎 Name Matching",
         "Admin": "⚙️ Admin",
     }
-    sidebar_choice = st.radio(
-        "Go to",
-        list(menu_options.values()),
-        index=1,
-        label_visibility="collapsed",
-    )
-    reverse_menu = {v: k for k, v in menu_options.items()}
-    sidebar_menu = reverse_menu.get(sidebar_choice, "Name Matching")
+    if "sidebar_menu" not in st.session_state:
+        st.session_state["sidebar_menu"] = "Name Matching"
+    for key, label in menu_options.items():
+        is_active = st.session_state["sidebar_menu"] == key
+        if st.button(
+            label,
+            use_container_width=True,
+            type="primary" if is_active else "secondary",
+            key=f"menu_btn_{key}",
+        ):
+            st.session_state["sidebar_menu"] = key
+            st.rerun()
+    sidebar_menu = st.session_state["sidebar_menu"]
     st.divider()
 
     st.header("Matching Settings")
