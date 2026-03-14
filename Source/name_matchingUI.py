@@ -608,7 +608,6 @@ method_key = {
 
 if sidebar_menu == "Data Upload":
     st.subheader("Data Upload")
-    st.markdown("Select your source file to upload.")
     source_upload_df = None
     mapping_df = pd.DataFrame(columns=["Source Column", "Destination Column"])
     preview_clicked = False
