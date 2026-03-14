@@ -189,6 +189,25 @@ st.markdown(
         font-size: 0.86rem;
         font-weight: 600;
       }
+      div[data-testid="stSidebar"] div[role="radiogroup"] label {
+        background: #343a4c;
+        border-radius: 999px;
+        padding: 0.55rem 0.9rem;
+        margin-bottom: 0.7rem;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 6px 14px rgba(22, 28, 42, 0.18);
+      }
+      div[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
+        background: #2d3342;
+      }
+      div[data-testid="stSidebar"] div[role="radiogroup"] label div {
+        color: #f2f5fb !important;
+        font-weight: 700;
+        font-size: 0.98rem;
+      }
+      div[data-testid="stSidebar"] div[role="radiogroup"] input:checked + div {
+        color: #ffffff !important;
+      }
       .nm-chat-quick {
         margin-top: 0.35rem;
         margin-bottom: 0.25rem;
@@ -508,13 +527,19 @@ def run_matching(
 
 
 with st.sidebar:
-    st.header("Menu")
-    sidebar_menu = st.radio(
+    menu_options = {
+        "Data Upload": "📥 Data Upload",
+        "Name Matching": "🔎 Name Matching",
+        "Admin": "⚙️ Admin",
+    }
+    sidebar_choice = st.radio(
         "Go to",
-        ["Data Upload", "Name Matching", "Admin"],
+        list(menu_options.values()),
         index=1,
         label_visibility="collapsed",
     )
+    reverse_menu = {v: k for k, v in menu_options.items()}
+    sidebar_menu = reverse_menu.get(sidebar_choice, "Name Matching")
     st.divider()
 
     st.header("Matching Settings")
