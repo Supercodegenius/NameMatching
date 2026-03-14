@@ -290,6 +290,41 @@ def _first_token(text: str) -> str:
     return text.split(" ", 1)[0] if text else ""
 
 
+COMMON_COMPANY_TOKENS = {
+    "ltd",
+    "limited",
+    "inc",
+    "incorporated",
+    "corp",
+    "corporation",
+    "co",
+    "company",
+    "llc",
+    "plc",
+    "pte",
+    "pty",
+    "gmbh",
+    "sa",
+    "sarl",
+    "ag",
+    "bv",
+}
+
+
+def _core_token_list(text: str) -> list[str]:
+    tokens = text.split()
+    if not tokens:
+        return []
+    return [tok for tok in tokens if tok not in COMMON_COMPANY_TOKENS]
+
+
+def _initials_from_tokens(tokens: list[str]) -> str:
+    if not tokens:
+        return ""
+    initials = "".join(tok[0] for tok in tokens if tok)
+    return initials[:6]
+
+
 def _ai_weighted_score(
     fuzzy: int,
     jaro: int,
@@ -646,18 +681,22 @@ def match_names(
                         key=lambda idx: abs(len(target_normalized[idx]) - src_len),
                     )
 
-                # For large datasets, use the max distance to filter candidates early.
+                # For large datasets, use a (slightly) adaptive max distance to filter candidates early.
                 src_len = len(src_n)
+                adaptive_max_distance = lev_max_distance
+                if src_len >= 12:
+                    adaptive_max_distance = max(lev_max_distance, int(round(src_len * 0.12)))
+                adaptive_max_distance = min(adaptive_max_distance, 12)
                 distance_cutoff = None
-                if lev_max_distance is not None and lev_max_distance >= 0 and candidate_indices:
+                if adaptive_max_distance is not None and adaptive_max_distance >= 0 and candidate_indices:
                     filtered = [
                         idx
                         for idx in candidate_indices
-                        if abs(target_lengths[idx] - src_len) <= lev_max_distance
+                        if abs(target_lengths[idx] - src_len) <= adaptive_max_distance
                     ]
                     if filtered:
                         candidate_indices = filtered
-                        distance_cutoff = lev_max_distance
+                        distance_cutoff = adaptive_max_distance
                     else:
                         # Fall back to a small length-based shortlist to keep things fast.
                         candidate_indices = sorted(
@@ -727,7 +766,7 @@ def match_names(
                     "matched_name": best_name,
                     "distance": best_distance,
                     "score": similarity_score,
-                    "is_match": best_distance <= lev_max_distance,
+                    "is_match": best_distance <= adaptive_max_distance,
                 }
 
             results.append({"source_name": src, **best_cache[src_n]})
@@ -737,6 +776,11 @@ def match_names(
         best_cache = {}
         target_first_tokens = [_first_token(name) for name in target_normalized]
         target_token_sets = [set(name.split()) for name in target_normalized]
+        target_core_token_sets = [set(_core_token_list(name)) for name in target_normalized]
+        target_initials = [
+            _initials_from_tokens(_core_token_list(name) or name.split())
+            for name in target_normalized
+        ]
         ai_shortlist_max = 80
         ai_large_shortlist_trigger = 100
         ai_early_exit_score = 97
@@ -783,7 +827,11 @@ def match_names(
                         )[:ai_shortlist_max]
 
                 src_first_token = _first_token(src_n)
-                src_token_set = set(src_n.split())
+                src_token_list = src_n.split()
+                src_token_set = set(src_token_list)
+                src_core_list = _core_token_list(src_n)
+                src_core_set = set(src_core_list)
+                src_initials = _initials_from_tokens(src_core_list or src_token_list)
                 best_name = ""
                 best_score = 0
                 best_fuzzy = 0
@@ -792,27 +840,48 @@ def match_names(
                 for idx in candidate_indices:
                     tgt_n = target_normalized[idx]
                     fuzzy = fuzzy_score(src_n, tgt_n)
+                    wratio = (
+                        int(round(_rf_fuzz.WRatio(src_n, tgt_n)))
+                        if _rf_fuzz is not None
+                        else fuzzy
+                    )
                     first_token_bonus = bool(
                         src_first_token and src_first_token == target_first_tokens[idx]
                     )
-                    max_possible = int(round((0.35 * fuzzy) + 65 + (5 if first_token_bonus else 0)))
+                    upper = max(fuzzy, wratio)
+                    max_possible = int(round((0.35 * upper) + 60 + (5 if first_token_bonus else 0)))
                     if max_possible <= best_score:
                         continue
 
                     token = _token_set_score_from_sets(src_token_set, target_token_sets[idx])
+                    core_token = _token_set_score_from_sets(
+                        src_core_set, target_core_token_sets[idx]
+                    )
                     jaro = jaro_winkler_score(src_n, tgt_n)
                     score = _ai_weighted_score(
-                        fuzzy,
+                        max(fuzzy, wratio),
                         jaro,
-                        token,
+                        max(token, core_token),
                         first_token_bonus=first_token_bonus,
                     )
+                    if core_token >= 80:
+                        score = min(100, score + 4)
+                    if (
+                        src_core_set
+                        and target_core_token_sets[idx]
+                        and (src_core_set <= target_core_token_sets[idx]
+                             or target_core_token_sets[idx] <= src_core_set)
+                        and min(len(src_core_set), len(target_core_token_sets[idx])) >= 2
+                    ):
+                        score = min(100, score + 6)
+                    if src_initials and src_initials == target_initials[idx]:
+                        score = min(100, score + 4)
                     if score > best_score:
                         best_score = score
                         best_name = target_originals[idx]
                         best_fuzzy = fuzzy
                         best_jaro = jaro
-                        best_token = token
+                        best_token = max(token, core_token)
                         if best_score >= ai_early_exit_score:
                             break
                 best_cache[src_n] = {
