@@ -243,11 +243,8 @@ st.markdown(
         color: #4e6180;
         font-size: 0.86rem;
       }
-      /* Hide Streamlit chrome/widgets (including bottom-right icon) */
-      #MainMenu,
-      header,
+      /* Hide Streamlit footer/status, keep header so sidebar toggle is visible */
       footer,
-      div[data-testid="stToolbar"],
       div[data-testid="stDecoration"],
       div[data-testid="stStatusWidget"] {
         visibility: hidden;
