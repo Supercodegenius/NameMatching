@@ -8,3 +8,5 @@ npm-debug.log
 __pycache__/
 *.pyc
 Source/data_upload.db
+.venv/
+.streamlit*.log
