@@ -717,22 +717,28 @@ if sidebar_menu == "Data Upload":
 if sidebar_menu == "Tower Matching":
     st.subheader("Tower Matching")
 
-    caption_col, link_col = st.columns([4, 1], gap="small")
-    with caption_col:
+    tower_template_path = os.path.join(BASE_DIR, "demo_data", "Tower_Matching_Template.xlsx")
+    if os.path.exists(tower_template_path):
+        with open(tower_template_path, "rb") as template_file:
+            template_bytes = template_file.read()
+        b64 = base64.b64encode(template_bytes).decode("ascii")
+        href = (
+            f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;'
+            f'base64,{b64}" download="Tower_Matching_Template.xlsx"'
+            ' style="text-decoration: underline;">'
+            "Tower Matching Template</a>"
+        )
+        st.markdown(
+            f"""
+            <div style="display:flex; align-items:baseline; gap:0.5rem; flex-wrap:wrap;">
+              <span>Upload a tower match file (CSV/XLSX). Use previews to sanity check the data.</span>
+              {href}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
         st.caption("Upload a tower match file (CSV/XLSX). Use previews to sanity check the data.")
-    with link_col:
-        tower_template_path = os.path.join(BASE_DIR, "demo_data", "Tower_Matching_Template.xlsx")
-        if os.path.exists(tower_template_path):
-            with open(tower_template_path, "rb") as template_file:
-                template_bytes = template_file.read()
-            b64 = base64.b64encode(template_bytes).decode("ascii")
-            href = (
-                f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;'
-                f'base64,{b64}" download="Tower_Matching_Template.xlsx"'
-                ' style="text-decoration: underline;">'
-                "Tower Matching Template</a>"
-            )
-            st.markdown(href, unsafe_allow_html=True)
 
     tower_source_file = st.file_uploader(
         "**Tower Source File**",
