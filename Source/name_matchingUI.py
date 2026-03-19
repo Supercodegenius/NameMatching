@@ -520,7 +520,7 @@ def run_matching(
     levenshtein_max_distance: int,
     levenshtein_engine: str,
 ) -> pd.DataFrame:
-    from Source.slotmanager import match_names
+    from Source.namematching import match_names
 
     return match_names(
         list(left_values),
@@ -536,6 +536,7 @@ with st.sidebar:
     menu_options = {
         "Data Upload": "📥 Data Upload",
         "Name Matching": "🔎 Name Matching",
+        "Tower Matching": "🗼 Tower Matching",
         "Admin": "⚙️ Admin",
     }
     if "sidebar_menu" not in st.session_state:
@@ -710,6 +711,12 @@ if sidebar_menu == "Data Upload":
         )
 
     st.markdown("Switch to **Name Matching** from the left menu to run matching.")
+    st.stop()
+
+if sidebar_menu == "Tower Matching":
+    st.subheader("Tower Matching")
+    st.caption("Configure and run tower-level matching workflows.")
+    st.info("Tower Matching is not wired yet. Let me know the inputs and outputs you want here.")
     st.stop()
 
 if sidebar_menu == "Admin":
