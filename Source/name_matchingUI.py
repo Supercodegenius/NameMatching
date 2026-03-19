@@ -717,7 +717,6 @@ if sidebar_menu == "Tower Matching":
     st.subheader("Tower Matching")
     st.caption("Upload tower datasets to start tower-level matching workflows.")
 
-    st.markdown("### File Selector Utility")
     st.caption("Upload a file (CSV/XLSX). Use previews and map columns before matching.")
 
     tower_source_file = st.file_uploader(
