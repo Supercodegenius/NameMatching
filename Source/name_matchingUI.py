@@ -800,91 +800,100 @@ if sidebar_menu == "Tower Matching":
         Port of the VBA TM_Formula logic using positional columns (A=0 ... O=14).
         Returns: (working_df, working_next_df, final_result_df)
         """
-        df = source_df.copy()
-        df = _ensure_min_columns(df, 15)
-        working_next_rows: list[pd.Series] = []
-        final_rows: list[pd.Series] = []
+        df = _ensure_min_columns(source_df.copy(), 15)
+        columns = list(df.columns)
+        rows = df.to_numpy(copy=True).tolist()
+
+        working_next_rows: list[list] = []
+        final_rows: list[list] = []
 
         max_cycles = 1000
         max_rows = 30000
 
+        # Column positions (0-based)
+        col_c = 2
+        col_d = 3
+        col_e = 4
+        col_f = 5
+        col_h = 7
+        col_j = 9
+        col_k = 10
+        col_l = 11
+        col_m = 12
+        col_n = 13
+        col_o = 14
+
         for j in range(max_cycles + 1):
-            ws_lr = len(df)
+            ws_lr = len(rows)
             if ws_lr <= 1 or ws_lr == 1048576:
                 break
 
+            counts: dict[object, int] = {}
             i = 1  # 0-based index for Excel row 2
             while i < min(ws_lr, max_rows):
-                # Column positions (0-based)
-                col_c = 2
-                col_d = 3
-                col_e = 4
-                col_f = 5
-                col_h = 7
-                col_j = 9
-                col_k = 10
-                col_l = 11
-                col_m = 12
-                col_n = 13
-                col_o = 14
+                row = rows[i]
+                prev_row = rows[i - 1]
 
-                current_c = df.iat[i, col_c]
-                count_up_to_i = (df.iloc[: i + 1, col_c] == current_c).sum()
-                df.iat[i, col_k] = count_up_to_i - 1
+                current_c = row[col_c]
+                k_val = counts.get(current_c, 0)
+                row[col_k] = k_val
+                counts[current_c] = k_val + 1
 
-                df.iat[i, col_l] = "primary" if df.iat[i, col_f] == 0 else "non-primary"
+                row[col_l] = "primary" if row[col_f] == 0 else "non-primary"
 
-                if df.iat[i, col_k] == 0:
-                    df.iat[i, col_m] = 0
+                if row[col_k] == 0:
+                    row[col_m] = 0
                 else:
                     if (
-                        df.iat[i, col_f] == 0
-                        and df.iat[i, col_c] == df.iat[i - 1, col_c]
-                        and df.iat[i, col_d] == df.iat[i - 1, col_d]
-                        and df.iat[i, col_e] == df.iat[i - 1, col_e]
-                        and df.iat[i, col_f] == df.iat[i - 1, col_f]
-                        and df.iat[i, col_h] == df.iat[i - 1, col_h]
-                        and df.iat[i, col_j] != df.iat[i - 1, col_j]
+                        row[col_f] == 0
+                        and row[col_c] == prev_row[col_c]
+                        and row[col_d] == prev_row[col_d]
+                        and row[col_e] == prev_row[col_e]
+                        and row[col_f] == prev_row[col_f]
+                        and row[col_h] == prev_row[col_h]
+                        and row[col_j] != prev_row[col_j]
                     ):
-                        df.iat[i, col_m] = 0
+                        row[col_m] = 0
                     else:
-                        df.iat[i, col_m] = "next cycle"
+                        row[col_m] = "next cycle"
 
-                if df.iat[i, col_k] == 0:
-                    df.iat[i, col_n] = 0
+                if row[col_k] == 0:
+                    row[col_n] = 0
                 else:
-                    if df.iat[i, col_f] >= (df.iat[i - 1, col_e] + df.iat[i - 1, col_f]):
-                        df.iat[i, col_n] = 0
+                    if row[col_f] >= (prev_row[col_e] + prev_row[col_f]):
+                        row[col_n] = 0
                     else:
-                        if df.iat[i, col_e] == df.iat[i - 1, col_e] and df.iat[i, col_f] == df.iat[i - 1, col_f]:
-                            df.iat[i, col_n] = 0
+                        if row[col_e] == prev_row[col_e] and row[col_f] == prev_row[col_f]:
+                            row[col_n] = 0
                         else:
-                            df.iat[i, col_n] = "next cycle"
+                            row[col_n] = "next cycle"
 
-                df.iat[i, col_o] = df.iat[i, col_m] if df.iat[i, col_l] == "primary" else df.iat[i, col_n]
+                row[col_o] = row[col_m] if row[col_l] == "primary" else row[col_n]
 
-                if df.iat[i, col_k] == -1:
+                if row[col_k] == -1:
                     if i > 1:
-                        df.iloc[1:i, col_m:col_o + 1] = j
-                        final_rows.extend(df.iloc[1:i].itertuples(index=False, name=None))
-                    df = df.drop(df.index[1 : i + 1]).reset_index(drop=True)
+                        for idx in range(1, i):
+                            rows[idx][col_m:col_o + 1] = [j, j, j]
+                        final_rows.extend(rows[1:i])
+                    rows = rows[:1] + rows[i + 1 :]
                     if working_next_rows:
-                        next_df = pd.DataFrame(working_next_rows, columns=df.columns)
-                        df = pd.concat([next_df, df], ignore_index=True)
+                        rows = working_next_rows + rows
                         working_next_rows = []
                     break
 
-                if df.iat[i, col_o] == "next cycle":
-                    working_next_rows.append(df.iloc[i].copy())
-                    df = df.drop(df.index[i]).reset_index(drop=True)
-                    ws_lr = len(df)
+                if row[col_o] == "next cycle":
+                    working_next_rows.append(row.copy())
+                    rows.pop(i)
+                    counts[current_c] = counts.get(current_c, 1) - 1
+                    ws_lr = len(rows)
                     continue
 
                 i += 1
 
-        working_next_df = pd.DataFrame(working_next_rows, columns=df.columns)
-        final_result_df = pd.DataFrame(final_rows, columns=df.columns)
-        return df, working_next_df, final_result_df
+        working_df = pd.DataFrame(rows, columns=columns)
+        working_next_df = pd.DataFrame(working_next_rows, columns=columns)
+        final_result_df = pd.DataFrame(final_rows, columns=columns)
+        return working_df, working_next_df, final_result_df
 
     if tower_source_df is None:
         st.info("Upload the tower source file to get started.")
