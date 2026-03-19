@@ -730,7 +730,7 @@ if sidebar_menu == "Tower Matching":
                 f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;'
                 f'base64,{b64}" download="Tower_Matching_Template.xlsx"'
                 ' style="text-decoration: underline;">'
-                "Download Tower Matching Template</a>"
+                "Tower Matching Template</a>"
             )
             st.markdown(href, unsafe_allow_html=True)
 
