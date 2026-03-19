@@ -718,7 +718,7 @@ if sidebar_menu == "Tower Matching":
     st.caption("Upload tower datasets to start tower-level matching workflows.")
 
     st.markdown("### File Selector Utility")
-    st.caption("Upload two files (CSV/XLSX) to compare or match tower records.")
+    st.caption("Upload two files (CSV/XLSX). Use previews and map columns before matching.")
 
     tower_col1, tower_col2 = st.columns(2, gap="large")
     with tower_col1:
@@ -734,12 +734,6 @@ if sidebar_menu == "Tower Matching":
             key="tower_reference_file",
         )
 
-    show_tower_previews = st.checkbox(
-        "Show previews",
-        value=True,
-        key="tower_show_previews",
-    )
-
     tower_source_df = read_table(tower_source_file)
     tower_reference_df = read_table(tower_reference_file)
 
@@ -748,18 +742,68 @@ if sidebar_menu == "Tower Matching":
     if tower_reference_file is not None and tower_reference_df is None:
         st.warning("Could not read the tower reference file.")
 
+    def _render_tower_mapping(label: str, df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
+        st.markdown(f"### {label} Column Mapping")
+        st.caption("Map each source column to a destination column using dropdowns.")
+
+        tower_columns = [str(col) for col in df.columns.tolist()]
+        header_col1, header_col2 = st.columns(2, gap="small")
+        with header_col1:
+            st.markdown("**Source Columns**")
+        with header_col2:
+            st.markdown("**Destination Columns**")
+
+        mapped_rows: list[dict[str, str]] = []
+        for idx, default_source in enumerate(tower_columns):
+            row_col1, row_col2 = st.columns(2, gap="small")
+            with row_col1:
+                selected_source = st.selectbox(
+                    f"{label} Source Column {idx + 1}",
+                    options=tower_columns,
+                    index=idx,
+                    key=f"{key_prefix}_source_col_{idx}",
+                    label_visibility="collapsed",
+                )
+            with row_col2:
+                default_dest_index = (
+                    tower_columns.index(default_source)
+                    if default_source in tower_columns
+                    else 0
+                )
+                selected_destination = st.selectbox(
+                    f"{label} Destination Column {idx + 1}",
+                    options=tower_columns,
+                    index=default_dest_index,
+                    key=f"{key_prefix}_dest_col_{idx}",
+                    label_visibility="collapsed",
+                )
+            mapped_rows.append(
+                {
+                    "Source Column": selected_source,
+                    "Destination Column": selected_destination,
+                }
+            )
+
+        mapping_df = pd.DataFrame(mapped_rows)
+        st.session_state[f"{key_prefix}_column_mapping"] = mapping_df
+        return mapping_df
+
     if tower_source_df is not None or tower_reference_df is not None:
         preview_col1, preview_col2 = st.columns(2, gap="large")
         with preview_col1:
             if tower_source_df is not None:
                 st.markdown("**Tower Source Preview**")
-                if show_tower_previews:
-                    st.dataframe(tower_source_df.head(100), use_container_width=True, height=320)
+                st.dataframe(tower_source_df.head(100), use_container_width=True, height=320)
         with preview_col2:
             if tower_reference_df is not None:
                 st.markdown("**Tower Reference Preview**")
-                if show_tower_previews:
-                    st.dataframe(tower_reference_df.head(100), use_container_width=True, height=320)
+                st.dataframe(tower_reference_df.head(100), use_container_width=True, height=320)
+
+    if tower_source_df is not None:
+        _render_tower_mapping("Tower Source", tower_source_df, "tower_source")
+
+    if tower_reference_df is not None:
+        _render_tower_mapping("Tower Reference", tower_reference_df, "tower_reference")
 
     if tower_source_df is None and tower_reference_df is None:
         st.info("Upload one or both files to get started.")
