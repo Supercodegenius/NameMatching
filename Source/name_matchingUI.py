@@ -780,11 +780,131 @@ if sidebar_menu == "Tower Matching":
         st.markdown("**Tower Source Preview**")
         st.dataframe(tower_source_df.head(100), use_container_width=True, height=320)
 
-    if tower_source_df is not None:
-        _render_tower_mapping("Tower Source", tower_source_df, "tower_source")
+    def _ensure_min_columns(df: pd.DataFrame, min_cols: int) -> pd.DataFrame:
+        if df.shape[1] >= min_cols:
+            return df
+        extra_needed = min_cols - df.shape[1]
+        extra_cols = []
+        base_idx = 1
+        while len(extra_cols) < extra_needed:
+            name = f"_col_{df.shape[1] + base_idx}"
+            if name not in df.columns:
+                extra_cols.append(name)
+            base_idx += 1
+        for col_name in extra_cols:
+            df[col_name] = ""
+        return df
+
+    def TM_Formula(source_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """
+        Port of the VBA TM_Formula logic using positional columns (A=0 ... O=14).
+        Returns: (working_df, working_next_df, final_result_df)
+        """
+        df = source_df.copy()
+        df = _ensure_min_columns(df, 15)
+        working_next_rows: list[pd.Series] = []
+        final_rows: list[pd.Series] = []
+
+        max_cycles = 1000
+        max_rows = 30000
+
+        for j in range(max_cycles + 1):
+            ws_lr = len(df)
+            if ws_lr <= 1 or ws_lr == 1048576:
+                break
+
+            i = 1  # 0-based index for Excel row 2
+            while i < min(ws_lr, max_rows):
+                # Column positions (0-based)
+                col_c = 2
+                col_d = 3
+                col_e = 4
+                col_f = 5
+                col_h = 7
+                col_j = 9
+                col_k = 10
+                col_l = 11
+                col_m = 12
+                col_n = 13
+                col_o = 14
+
+                current_c = df.iat[i, col_c]
+                count_up_to_i = (df.iloc[: i + 1, col_c] == current_c).sum()
+                df.iat[i, col_k] = count_up_to_i - 1
+
+                df.iat[i, col_l] = "primary" if df.iat[i, col_f] == 0 else "non-primary"
+
+                if df.iat[i, col_k] == 0:
+                    df.iat[i, col_m] = 0
+                else:
+                    if (
+                        df.iat[i, col_f] == 0
+                        and df.iat[i, col_c] == df.iat[i - 1, col_c]
+                        and df.iat[i, col_d] == df.iat[i - 1, col_d]
+                        and df.iat[i, col_e] == df.iat[i - 1, col_e]
+                        and df.iat[i, col_f] == df.iat[i - 1, col_f]
+                        and df.iat[i, col_h] == df.iat[i - 1, col_h]
+                        and df.iat[i, col_j] != df.iat[i - 1, col_j]
+                    ):
+                        df.iat[i, col_m] = 0
+                    else:
+                        df.iat[i, col_m] = "next cycle"
+
+                if df.iat[i, col_k] == 0:
+                    df.iat[i, col_n] = 0
+                else:
+                    if df.iat[i, col_f] >= (df.iat[i - 1, col_e] + df.iat[i - 1, col_f]):
+                        df.iat[i, col_n] = 0
+                    else:
+                        if df.iat[i, col_e] == df.iat[i - 1, col_e] and df.iat[i, col_f] == df.iat[i - 1, col_f]:
+                            df.iat[i, col_n] = 0
+                        else:
+                            df.iat[i, col_n] = "next cycle"
+
+                df.iat[i, col_o] = df.iat[i, col_m] if df.iat[i, col_l] == "primary" else df.iat[i, col_n]
+
+                if df.iat[i, col_k] == -1:
+                    if i > 1:
+                        df.iloc[1:i, col_m:col_o + 1] = j
+                        final_rows.extend(df.iloc[1:i].itertuples(index=False, name=None))
+                    df = df.drop(df.index[1 : i + 1]).reset_index(drop=True)
+                    if working_next_rows:
+                        next_df = pd.DataFrame(working_next_rows, columns=df.columns)
+                        df = pd.concat([next_df, df], ignore_index=True)
+                        working_next_rows = []
+                    break
+
+                if df.iat[i, col_o] == "next cycle":
+                    working_next_rows.append(df.iloc[i].copy())
+                    df = df.drop(df.index[i]).reset_index(drop=True)
+                    ws_lr = len(df)
+                    continue
+
+                i += 1
+
+        working_next_df = pd.DataFrame(working_next_rows, columns=df.columns)
+        final_result_df = pd.DataFrame(final_rows, columns=df.columns)
+        return df, working_next_df, final_result_df
 
     if tower_source_df is None:
         st.info("Upload the tower source file to get started.")
+        st.stop()
+
+    if st.button("Tower Match", type="primary", use_container_width=True):
+        with st.spinner("Running Tower Match formula..."):
+            working_df, working_next_df, final_result_df = TM_Formula(tower_source_df)
+
+        st.success("Tower Match complete.")
+        st.markdown("### Working Sheet (Processed)")
+        st.dataframe(working_df.head(200), use_container_width=True, height=360)
+
+        if not working_next_df.empty:
+            st.markdown("### Working Sheet Next")
+            st.dataframe(working_next_df.head(200), use_container_width=True, height=360)
+
+        if not final_result_df.empty:
+            st.markdown("### Final Result")
+            st.dataframe(final_result_df.head(200), use_container_width=True, height=360)
 
     st.stop()
 
