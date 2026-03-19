@@ -719,7 +719,7 @@ if sidebar_menu == "Tower Matching":
 
     caption_col, link_col = st.columns([4, 1], gap="small")
     with caption_col:
-        st.caption("Upload a file (CSV/XLSX). Use previews and map columns before matching.")
+        st.caption("Upload a tower match file (CSV/XLSX). Use previews to sanity check the data.")
     with link_col:
         tower_template_path = os.path.join(BASE_DIR, "demo_data", "Tower_Matching_Template.xlsx")
         if os.path.exists(tower_template_path):
