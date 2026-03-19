@@ -715,8 +715,55 @@ if sidebar_menu == "Data Upload":
 
 if sidebar_menu == "Tower Matching":
     st.subheader("Tower Matching")
-    st.caption("Configure and run tower-level matching workflows.")
-    st.info("Tower Matching is not wired yet. Let me know the inputs and outputs you want here.")
+    st.caption("Upload tower datasets to start tower-level matching workflows.")
+
+    st.markdown("### File Selector Utility")
+    st.caption("Upload two files (CSV/XLSX) to compare or match tower records.")
+
+    tower_col1, tower_col2 = st.columns(2, gap="large")
+    with tower_col1:
+        tower_source_file = st.file_uploader(
+            "**Tower Source File**",
+            type=["csv", "xlsx"],
+            key="tower_source_file",
+        )
+    with tower_col2:
+        tower_reference_file = st.file_uploader(
+            "**Tower Reference File**",
+            type=["csv", "xlsx"],
+            key="tower_reference_file",
+        )
+
+    show_tower_previews = st.checkbox(
+        "Show previews",
+        value=True,
+        key="tower_show_previews",
+    )
+
+    tower_source_df = read_table(tower_source_file)
+    tower_reference_df = read_table(tower_reference_file)
+
+    if tower_source_file is not None and tower_source_df is None:
+        st.warning("Could not read the tower source file.")
+    if tower_reference_file is not None and tower_reference_df is None:
+        st.warning("Could not read the tower reference file.")
+
+    if tower_source_df is not None or tower_reference_df is not None:
+        preview_col1, preview_col2 = st.columns(2, gap="large")
+        with preview_col1:
+            if tower_source_df is not None:
+                st.markdown("**Tower Source Preview**")
+                if show_tower_previews:
+                    st.dataframe(tower_source_df.head(100), use_container_width=True, height=320)
+        with preview_col2:
+            if tower_reference_df is not None:
+                st.markdown("**Tower Reference Preview**")
+                if show_tower_previews:
+                    st.dataframe(tower_reference_df.head(100), use_container_width=True, height=320)
+
+    if tower_source_df is None and tower_reference_df is None:
+        st.info("Upload one or both files to get started.")
+
     st.stop()
 
 if sidebar_menu == "Admin":
