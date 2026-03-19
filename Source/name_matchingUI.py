@@ -5,6 +5,7 @@
 # Developed By Ambuj Kumar
 
 import os
+import base64
 import json
 import sqlite3
 import xml.etree.ElementTree as ET
@@ -723,13 +724,14 @@ if sidebar_menu == "Tower Matching":
         tower_template_path = os.path.join(BASE_DIR, "demo_data", "Tower_Matching_Template.xlsx")
         if os.path.exists(tower_template_path):
             with open(tower_template_path, "rb") as template_file:
-                st.download_button(
-                    "Download template",
-                    data=template_file,
-                    file_name="Tower_Matching_Template.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
+                template_bytes = template_file.read()
+            b64 = base64.b64encode(template_bytes).decode("ascii")
+            href = (
+                f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;'
+                f'base64,{b64}" download="Tower_Matching_Template.xlsx">'
+                "Download Tower Matching Template</a>"
+            )
+            st.markdown(href, unsafe_allow_html=True)
 
     tower_source_file = st.file_uploader(
         "**Tower Source File**",
