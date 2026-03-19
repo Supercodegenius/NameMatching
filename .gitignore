@@ -10,3 +10,4 @@ __pycache__/
 Source/data_upload.db
 .venv/
 .streamlit*.log
+~$*.xlsx

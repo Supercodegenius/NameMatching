@@ -715,9 +715,21 @@ if sidebar_menu == "Data Upload":
 
 if sidebar_menu == "Tower Matching":
     st.subheader("Tower Matching")
-    st.caption("Upload tower datasets to start tower-level matching workflows.")
 
-    st.caption("Upload a file (CSV/XLSX). Use previews and map columns before matching.")
+    caption_col, link_col = st.columns([4, 1], gap="small")
+    with caption_col:
+        st.caption("Upload a file (CSV/XLSX). Use previews and map columns before matching.")
+    with link_col:
+        tower_template_path = os.path.join(BASE_DIR, "demo_data", "Tower_Matching_Template.xlsx")
+        if os.path.exists(tower_template_path):
+            with open(tower_template_path, "rb") as template_file:
+                st.download_button(
+                    "Download template",
+                    data=template_file,
+                    file_name="Tower_Matching_Template.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
 
     tower_source_file = st.file_uploader(
         "**Tower Source File**",
