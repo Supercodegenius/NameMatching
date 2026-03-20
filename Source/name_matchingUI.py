@@ -1231,18 +1231,8 @@ if st.session_state.pop("scroll_to_top_matches", False):
         height=0,
     )
 
-download_source_df = left_df.loc[result_df.index].reset_index(drop=True)
-download_match_cols = [c for c in result_df.columns if c not in download_source_df.columns]
-download_df = pd.concat(
-    [download_source_df, result_df[download_match_cols].reset_index(drop=True)],
-    axis=1,
-)
-csv_data = download_df.to_csv(index=False).encode("utf-8")
-download_clicked = st.download_button(
-    "Download Match Results (CSV)",
-    data=csv_data,
-    file_name="name_match_results.csv",
-    mime="text/csv",
+download_clicked = st.button(
+    "Download Match Results",
     use_container_width=True,
 )
 if download_clicked:
