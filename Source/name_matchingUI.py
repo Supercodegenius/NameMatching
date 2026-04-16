@@ -390,28 +390,12 @@ def _clean_display_path(path: str) -> str:
         return normalized
 
 
-def _slm_matching_available() -> tuple[bool, str | None]:
-    missing_deps = []
-    for module_name in ("torch", "transformers"):
-        if importlib.util.find_spec(module_name) is None:
-            missing_deps.append(module_name)
-    if missing_deps:
-        return (
-            False,
-            "SLM dependencies are missing: "
-            + ", ".join(missing_deps)
-            + ". Add them to requirements.txt and redeploy.",
-        )
-
-    try:
-        from Source import namematching as nm
-    except Exception as exc:
-        return False, f"SLM backend import failed: {exc}"
-
-    match_method = getattr(nm, "MatchMethod", None)
-    supported_methods = set(get_args(match_method)) if match_method is not None else set()
-    if supported_methods and "slm" not in supported_methods:
-        return False, "SLM Match is unavailable in this deployment."
+def _slm_health_status() -> dict[str, object]:
+    dependency_status = {
+        "torch": importlib.util.find_spec("torch") is not None,
+        "transformers": importlib.util.find_spec("transformers") is not None,
+    }
+    missing_deps = [name for name, is_ok in dependency_status.items() if not is_ok]
 
     script_dir = os.path.dirname(__file__)
     model_candidates = [
@@ -419,10 +403,56 @@ def _slm_matching_available() -> tuple[bool, str | None]:
         os.path.join(script_dir, "outputs", "biencoder"),
         os.path.join(os.path.dirname(script_dir), "outputs", "biencoder"),
     ]
-    if not any(os.path.isdir(candidate) for candidate in model_candidates):
-        return False, "SLM model files are not deployed."
+    available_model_dir = next(
+        (candidate for candidate in model_candidates if os.path.isdir(candidate)),
+        None,
+    )
 
-    return True, None
+    health: dict[str, object] = {
+        "dependency_status": dependency_status,
+        "missing_dependencies": missing_deps,
+        "model_candidates": model_candidates,
+        "available_model_dir": available_model_dir,
+        "backend_import_error": None,
+        "method_supported": True,
+        "reason": None,
+        "ready": False,
+    }
+
+    if missing_deps:
+        health["reason"] = (
+            "SLM dependencies are missing: "
+            + ", ".join(missing_deps)
+            + ". Add them to requirements.txt and redeploy."
+        )
+        return health
+
+    try:
+        from Source import namematching as nm
+    except Exception as exc:
+        health["backend_import_error"] = str(exc)
+        health["reason"] = f"SLM backend import failed: {exc}"
+        return health
+
+    match_method = getattr(nm, "MatchMethod", None)
+    supported_methods = set(get_args(match_method)) if match_method is not None else set()
+    method_supported = not supported_methods or "slm" in supported_methods
+    health["method_supported"] = method_supported
+    if not method_supported:
+        health["reason"] = "SLM Match is unavailable in this deployment."
+        return health
+
+    if available_model_dir is None:
+        health["reason"] = "SLM model files are not deployed."
+        return health
+
+    health["ready"] = True
+    return health
+
+
+def _slm_matching_available() -> tuple[bool, str | None]:
+    health = _slm_health_status()
+    return bool(health.get("ready", False)), health.get("reason")
 
 
 def _get_openai_client():
@@ -694,7 +724,30 @@ with st.sidebar:
     st.caption("Configure matching and provide data.")
 
     use_demo_files = st.toggle("Use built-in demo files", value=True)
+    slm_health = _slm_health_status()
     slm_available, slm_unavailable_reason = _slm_matching_available()
+
+    with st.expander("SLM Health", expanded=False):
+        if bool(slm_health.get("ready", False)):
+            st.success("SLM runtime is ready.")
+        else:
+            st.warning(str(slm_health.get("reason") or "SLM is not ready."))
+
+        dep_status = slm_health.get("dependency_status", {})
+        for dep_name, is_ok in dep_status.items():
+            st.write(f"{dep_name}: {'OK' if is_ok else 'Missing'}")
+
+        available_model_dir = slm_health.get("available_model_dir")
+        if available_model_dir:
+            st.caption(f"Model directory found: {available_model_dir}")
+        else:
+            st.caption("Model directory not found. Checked:")
+            for candidate in slm_health.get("model_candidates", []):
+                st.caption(candidate)
+
+        backend_import_error = slm_health.get("backend_import_error")
+        if backend_import_error:
+            st.caption(f"Backend import error: {backend_import_error}")
 
     with st.expander("Matching settings", expanded=True):
         method_options = [
