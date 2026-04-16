@@ -5,6 +5,7 @@
 # Developed By Ambuj Kumar
 
 import os
+import runpy
 import base64
 import json
 import sqlite3
@@ -18,8 +19,15 @@ from streamlit.components.v1 import html
 FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png.jpeg")
 
 
+def _safe_set_page_config(**kwargs) -> None:
+    try:
+        st.set_page_config(**kwargs)
+    except Exception:
+        # Ignore duplicate page config errors when launched from a parent app.
+        pass
 
-st.set_page_config(
+
+_safe_set_page_config(
     page_title="Name Matching",
     page_icon=FAVICON_PATH,
     layout="wide",
@@ -533,14 +541,81 @@ def run_matching(
     )
 
 
+@st.cache_data(show_spinner=False)
+def run_matching_staged(
+    left_values: tuple[str, ...],
+    left_locs: tuple[str, ...],
+    right_values: tuple[str, ...],
+    right_locs: tuple[str, ...],
+    method_value: str,
+    fuzzy_threshold: int,
+    levenshtein_max_distance: int,
+    levenshtein_engine: str,
+    location_threshold: int = 85,
+) -> pd.DataFrame:
+    """Two-stage matching: filter reference rows by location first, then match on name within those candidates."""
+    from collections import defaultdict
+    from Source.namematching import match_names, normalize_name, fuzzy_score
+
+    left_list = list(left_values)
+    left_locs_list = list(left_locs)
+    right_list = list(right_values)
+    right_locs_list = list(right_locs)
+
+    right_locs_norm = [normalize_name(loc) for loc in right_locs_list]
+    left_locs_norm = [normalize_name(loc) for loc in left_locs_list]
+    all_right_indices = list(range(len(right_list)))
+
+    # Group source indices by their normalized location
+    loc_to_src_indices: dict[str, list[int]] = defaultdict(list)
+    for i, loc_n in enumerate(left_locs_norm):
+        loc_to_src_indices[loc_n].append(i)
+
+    # For each unique source location, find reference rows whose location matches
+    loc_to_tgt_indices: dict[str, list[int]] = {}
+    for src_loc_n in loc_to_src_indices:
+        if src_loc_n:
+            matched = [
+                j for j, tgt_loc_n in enumerate(right_locs_norm)
+                if tgt_loc_n and fuzzy_score(src_loc_n, tgt_loc_n) >= location_threshold
+            ]
+            loc_to_tgt_indices[src_loc_n] = matched if matched else all_right_indices
+        else:
+            loc_to_tgt_indices[src_loc_n] = all_right_indices
+
+    # Run name matching per location group then reassemble in original source order
+    result_rows: list[dict] = [{}] * len(left_list)
+    for src_loc_n, src_indices in loc_to_src_indices.items():
+        tgt_indices = loc_to_tgt_indices[src_loc_n]
+        group_src = [left_list[i] for i in src_indices]
+        group_tgt = [right_list[j] for j in tgt_indices]
+        sub_df = match_names(
+            group_src,
+            group_tgt,
+            method=method_value,
+            fuzzy_threshold=fuzzy_threshold,
+            lev_max_distance=levenshtein_max_distance,
+            lev_engine=levenshtein_engine,
+        )
+        for row_pos, src_idx in enumerate(src_indices):
+            result_rows[src_idx] = sub_df.iloc[row_pos].to_dict()
+
+    return pd.DataFrame(result_rows)
+
+
 with st.sidebar:
     menu_options = {
         "Data Upload": "📥 Data Upload",
         "Name Matching": "🔎 Name Matching",
+        "ReLink": "🔁 ReLink",
         "Tower Matching": "🗼 Tower Matching",
         "Admin": "⚙️ Admin",
+        "SLM": "🤖 SLM",
     }
+    disabled_menu_items = {"Data Upload", "SLM", "Admin", "ReLink"}
     if "sidebar_menu" not in st.session_state:
+        st.session_state["sidebar_menu"] = "Name Matching"
+    elif st.session_state["sidebar_menu"] in disabled_menu_items:
         st.session_state["sidebar_menu"] = "Name Matching"
     for key, label in menu_options.items():
         is_active = st.session_state["sidebar_menu"] == key
@@ -549,10 +624,17 @@ with st.sidebar:
             use_container_width=True,
             type="primary" if is_active else "secondary",
             key=f"menu_btn_{key}",
+            disabled=key in disabled_menu_items,
         ):
             st.session_state["sidebar_menu"] = key
             st.rerun()
     sidebar_menu = st.session_state["sidebar_menu"]
+
+if sidebar_menu == "SLM":
+    runpy.run_path(os.path.join(BASE_DIR, "slm_ui.py"), run_name="__main__")
+    st.stop()
+
+with st.sidebar:
     st.divider()
 
     st.header("Matching Settings")
@@ -570,13 +652,14 @@ with st.sidebar:
                 "Jaro-Winkler Distance Match",
                 "Levenshtein Match",
                 "AI Advance Match",
+                "SLM Match",
             ],
         )
 
         threshold = 75
         lev_max_distance = 2
         lev_engine = "auto"
-        if method in {"Fuzzy Match", "Jaro-Winkler Distance Match", "AI Advance Match"}:
+        if method in {"Fuzzy Match", "Jaro-Winkler Distance Match", "AI Advance Match", "SLM Match"}:
             threshold = st.slider("Fuzzy threshold", 0, 100, 75, 1)
         if method == "Levenshtein Match":
             lev_max_distance = st.slider("Levenshtein max distance", 0, 10, 2, 1)
@@ -612,7 +695,21 @@ method_key = {
     "Jaro-Winkler Distance Match": "jaro_winkler",
     "Levenshtein Match": "levenshtein",
     "AI Advance Match": "ai_advanced",
+    "SLM Match": "slm",
 }[method]
+
+if "slm_bulk_warmed" not in st.session_state:
+    st.session_state["slm_bulk_warmed"] = False
+
+if method_key == "slm" and not st.session_state["slm_bulk_warmed"]:
+    with st.spinner("Preparing SLM model for faster matching..."):
+        try:
+            from Source.namematching import warmup_slm_runtime
+
+            warmup_slm_runtime()
+            st.session_state["slm_bulk_warmed"] = True
+        except Exception as exc:
+            st.warning(f"SLM warm-up could not complete: {exc}")
 
 if sidebar_menu == "Data Upload":
     st.subheader("Data Upload")
@@ -1110,16 +1207,11 @@ if include_industry:
 
 left_extra_cols: list[str] = []
 right_extra_cols: list[str] = []
-if include_location and left_location_col and left_location_col != left_name_col:
-    left_extra_cols.append(left_location_col)
-if include_location and right_location_col and right_location_col != right_name_col:
-    right_extra_cols.append(right_location_col)
+# Location is handled separately via staged matching; only append industry here.
 if include_industry and left_industry_col and left_industry_col != left_name_col:
-    if left_industry_col not in left_extra_cols:
-        left_extra_cols.append(left_industry_col)
+    left_extra_cols.append(left_industry_col)
 if include_industry and right_industry_col and right_industry_col != right_name_col:
-    if right_industry_col not in right_extra_cols:
-        right_extra_cols.append(right_industry_col)
+    right_extra_cols.append(right_industry_col)
 
 left_names = _compose_match_values(left_df, left_name_col, left_extra_cols)
 right_names = _compose_match_values(right_df, right_name_col, right_extra_cols)
@@ -1138,14 +1230,33 @@ with run_button_col:
 has_results = "result_df" in st.session_state
 if run_now:
     with st.spinner("Matching names..."):
-        st.session_state["result_df"] = run_matching(
-            tuple(left_names.tolist()),
-            tuple(right_names.tolist()),
-            method_key,
-            int(threshold),
-            int(lev_max_distance),
-            lev_engine,
+        _use_staged = (
+            include_location
+            and left_location_col is not None
+            and right_location_col is not None
         )
+        if _use_staged:
+            _left_locs = left_df[left_location_col].fillna("").astype(str)
+            _right_locs = right_df[right_location_col].fillna("").astype(str)
+            st.session_state["result_df"] = run_matching_staged(
+                tuple(left_names.tolist()),
+                tuple(_left_locs.tolist()),
+                tuple(right_names.tolist()),
+                tuple(_right_locs.tolist()),
+                method_key,
+                int(threshold),
+                int(lev_max_distance),
+                lev_engine,
+            )
+        else:
+            st.session_state["result_df"] = run_matching(
+                tuple(left_names.tolist()),
+                tuple(right_names.tolist()),
+                method_key,
+                int(threshold),
+                int(lev_max_distance),
+                lev_engine,
+            )
     st.session_state["scroll_to_top_matches"] = True
     has_results = True
 
@@ -1184,8 +1295,212 @@ def _to_display_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=lambda col: str(col).replace("_", " ").title())
 
 
+def _prepare_result_for_display(
+    df: pd.DataFrame,
+    *,
+    include_location: bool = False,
+    left_df: "pd.DataFrame | None" = None,
+    right_df: "pd.DataFrame | None" = None,
+    left_location_col: "str | None" = None,
+    right_name_col: "str | None" = None,
+    right_location_col: "str | None" = None,
+) -> pd.DataFrame:
+    """Reorder columns and optionally enrich with location data for display."""
+    display = df.copy()
+    if include_location:
+        if left_location_col and left_df is not None and left_location_col in left_df.columns:
+            display["source_location"] = left_df[left_location_col].reindex(display.index).values
+        if (
+            right_location_col
+            and right_df is not None
+            and right_name_col is not None
+            and right_name_col in right_df.columns
+            and right_location_col in right_df.columns
+        ):
+            right_loc_map = (
+                right_df.drop_duplicates(subset=[right_name_col])
+                .set_index(right_name_col)[right_location_col]
+                .to_dict()
+            )
+            display["matched_location"] = display["matched_name"].map(right_loc_map).fillna("")
+    priority = ["source_name", "matched_name"]
+    if include_location:
+        if "source_location" in display.columns:
+            priority.append("source_location")
+        if "matched_location" in display.columns:
+            priority.append("matched_location")
+    existing_priority = [c for c in priority if c in display.columns]
+    remaining = [c for c in display.columns if c not in priority]
+    return display[existing_priority + remaining]
+
+
+@st.cache_data(show_spinner=False)
+def _top_relink_candidates(source_value: str, target_values: tuple[str, ...], top_k: int = 10) -> list[str]:
+    from Source.namematching import fuzzy_score, normalize_name
+
+    source_text = str(source_value or "")
+    source_norm = normalize_name(source_text)
+
+    unique_targets: list[str] = []
+    seen: set[str] = set()
+    for value in target_values:
+        target = str(value or "").strip()
+        if not target or target in seen:
+            continue
+        seen.add(target)
+        unique_targets.append(target)
+
+    if not unique_targets:
+        return []
+
+    if not source_norm:
+        return unique_targets[:top_k]
+
+    scored: list[tuple[int, str]] = []
+    for target in unique_targets:
+        score = fuzzy_score(source_norm, normalize_name(target))
+        scored.append((int(score), target))
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [name for _, name in scored[:top_k]]
+
+
+def _relink_score(source_value: str, target_value: str) -> int:
+    from Source.namematching import fuzzy_score, normalize_name
+
+    if not str(target_value or "").strip():
+        return 0
+    return int(fuzzy_score(normalize_name(str(source_value or "")), normalize_name(str(target_value or ""))))
+
+
+if sidebar_menu == "ReLink":
+    st.subheader("ReLink Unmatched Records")
+
+    if "is_match" not in full_result_df.columns:
+        st.info("Current results do not contain match status. Run name matching again first.")
+        st.stop()
+
+    unmatched_df = full_result_df[full_result_df["is_match"].fillna(False) == False].copy()
+    if unmatched_df.empty:
+        st.success("No unmatched records found.")
+        st.stop()
+
+    relink_df = unmatched_df.head(int(max_rows_to_render)).copy().reset_index().rename(columns={"index": "_row_id"})
+    if len(unmatched_df) > len(relink_df):
+        st.caption(f"Showing first {len(relink_df):,} of {len(unmatched_df):,} unmatched rows.")
+
+    st.markdown("### ReLink Grid")
+    st.caption("Only unmatched rows are shown. Matched Record dropdown shows the closest reference match only.")
+
+    target_values_for_relink = tuple(right_names.tolist())
+    edited_relink_grid = relink_df[["_row_id", "source_name", "matched_name", "score", "is_match"]].copy()
+
+    closest_by_row: dict[int, str] = {}
+    dropdown_options: list[str] = [""]
+    seen_options = {""}
+    for idx, row in edited_relink_grid.iterrows():
+        row_id = int(row["_row_id"])
+        source_name = str(row.get("source_name", ""))
+        candidates = _top_relink_candidates(source_name, target_values_for_relink, top_k=1)
+        closest_name = candidates[0] if candidates else ""
+        closest_by_row[row_id] = closest_name
+        edited_relink_grid.at[idx, "matched_name"] = closest_name
+        edited_relink_grid.at[idx, "score"] = _relink_score(source_name, closest_name)
+        edited_relink_grid.at[idx, "is_match"] = bool(closest_name.strip())
+        if closest_name not in seen_options:
+            seen_options.add(closest_name)
+            dropdown_options.append(closest_name)
+
+    edited_relink_grid = edited_relink_grid.set_index("_row_id")
+
+    edited_relink_grid = st.data_editor(
+        edited_relink_grid,
+        hide_index=True,
+        use_container_width=True,
+        height=420,
+        key="relink_table_editor",
+        column_config={
+            "source_name": st.column_config.TextColumn("Source Name", disabled=True),
+            "matched_name": st.column_config.SelectboxColumn(
+                "Matched Record",
+                options=dropdown_options,
+                required=False,
+            ),
+            "score": st.column_config.NumberColumn("Score", disabled=True),
+            "is_match": st.column_config.CheckboxColumn("Is Match", disabled=True),
+        },
+        disabled=["source_name", "score", "is_match"],
+    )
+
+    for idx, row in edited_relink_grid.iterrows():
+        source_name = str(row.get("source_name", ""))
+        selected_text = str(row.get("matched_name", "") or "").strip()
+        edited_relink_grid.at[idx, "score"] = _relink_score(source_name, selected_text)
+        edited_relink_grid.at[idx, "is_match"] = bool(selected_text)
+
+    relink_updates_df = st.session_state.get("relink_updates_df")
+    if isinstance(relink_updates_df, pd.DataFrame) and not relink_updates_df.empty:
+        csv_bytes = relink_updates_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Download ReLink Updates",
+            data=csv_bytes,
+            file_name="relink_updates.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="download_relink_updates",
+        )
+
+    apply_relink = st.button("Apply ReLink Selections", type="primary", use_container_width=True)
+    if apply_relink:
+        updated_df = full_result_df.copy()
+        applied_count = 0
+        relink_updates: list[dict[str, object]] = []
+        for row_id, row in edited_relink_grid.iterrows():
+            row_id = int(row_id)
+            selected_name = row.get("matched_name", "")
+            if row_id not in updated_df.index:
+                continue
+            selected_text = str(selected_name or "").strip()
+            if not selected_text:
+                continue
+            source_text = str(updated_df.at[row_id, "source_name"]) if "source_name" in updated_df.columns else ""
+            old_matched_name = str(updated_df.at[row_id, "matched_name"]) if "matched_name" in updated_df.columns else ""
+            old_score = int(updated_df.at[row_id, "score"]) if "score" in updated_df.columns else 0
+            new_score = _relink_score(source_text, selected_text)
+            updated_df.at[row_id, "matched_name"] = selected_text
+            updated_df.at[row_id, "score"] = new_score
+            updated_df.at[row_id, "is_match"] = True
+
+            relink_updates.append(
+                {
+                    "row_id": row_id,
+                    "source_name": source_text,
+                    "old_matched_name": old_matched_name,
+                    "new_matched_name": selected_text,
+                    "old_score": old_score,
+                    "new_score": new_score,
+                }
+            )
+            applied_count += 1
+
+        st.session_state["result_df"] = updated_df
+        st.session_state["relink_updates_df"] = pd.DataFrame(relink_updates)
+        st.success(f"Applied {applied_count} ReLink selections.")
+        st.rerun()
+
+    st.stop()
+
+
 st.dataframe(
-    _style_matched_rows(_to_display_columns(result_df_view)),
+    _style_matched_rows(_to_display_columns(_prepare_result_for_display(
+        result_df_view,
+        include_location=include_location,
+        left_df=left_df,
+        right_df=right_df,
+        left_location_col=left_location_col,
+        right_name_col=right_name_col,
+        right_location_col=right_location_col,
+    ))),
     use_container_width=True,
     height=420,
 )
@@ -1210,7 +1525,15 @@ if "score" in result_df.columns:
 else:
     top_df = result_df.head(int(top_n))
 st.dataframe(
-    _style_matched_rows(_to_display_columns(top_df)),
+    _style_matched_rows(_to_display_columns(_prepare_result_for_display(
+        top_df,
+        include_location=include_location,
+        left_df=left_df,
+        right_df=right_df,
+        left_location_col=left_location_col,
+        right_name_col=right_name_col,
+        right_location_col=right_location_col,
+    ))),
     use_container_width=True,
     height=320,
 )
@@ -1231,19 +1554,11 @@ if st.session_state.pop("scroll_to_top_matches", False):
         height=0,
     )
 
-download_clicked = st.button(
+st.link_button(
     "Download Match Results",
+    "https://www.linkedin.com/in/surabhi-singh-368042167/",
     use_container_width=True,
 )
-if download_clicked:
-    html(
-        """
-        <script>
-          window.open("https://www.linkedin.com/in/ambuj-kumar-60a20a5/", "_blank");
-        </script>
-        """,
-        height=0,
-    )
 
 st.markdown('<div class="nm-chat-shell">', unsafe_allow_html=True)
 st.markdown(
