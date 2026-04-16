@@ -11,6 +11,7 @@ import json
 import sqlite3
 import xml.etree.ElementTree as ET
 from io import BytesIO
+from typing import get_args
 
 import pandas as pd
 import streamlit as st
@@ -388,6 +389,29 @@ def _clean_display_path(path: str) -> str:
         return normalized
 
 
+def _slm_matching_available() -> tuple[bool, str | None]:
+    try:
+        from Source import namematching as nm
+    except Exception as exc:
+        return False, f"SLM backend import failed: {exc}"
+
+    match_method = getattr(nm, "MatchMethod", None)
+    supported_methods = set(get_args(match_method)) if match_method is not None else set()
+    if supported_methods and "slm" not in supported_methods:
+        return False, "SLM Match is unavailable in this deployment."
+
+    script_dir = os.path.dirname(__file__)
+    model_candidates = [
+        os.path.join(".", "outputs", "biencoder"),
+        os.path.join(script_dir, "outputs", "biencoder"),
+        os.path.join(os.path.dirname(script_dir), "outputs", "biencoder"),
+    ]
+    if not any(os.path.isdir(candidate) for candidate in model_candidates):
+        return False, "SLM model files are not deployed."
+
+    return True, None
+
+
 def _get_openai_client():
     api_key = None
     try:
@@ -657,20 +681,26 @@ with st.sidebar:
     st.caption("Configure matching and provide data.")
 
     use_demo_files = st.toggle("Use built-in demo files", value=True)
+    slm_available, slm_unavailable_reason = _slm_matching_available()
 
     with st.expander("Matching settings", expanded=True):
+        method_options = [
+            "Exact Match",
+            "Fuzzy Match",
+            "Soundex Match",
+            "Jaro-Winkler Distance Match",
+            "Levenshtein Match",
+            "AI Advance Match",
+        ]
+        if slm_available:
+            method_options.append("SLM Match")
+
         method = st.selectbox(
             "Method",
-            [
-                "Exact Match",
-                "Fuzzy Match",
-                "Soundex Match",
-                "Jaro-Winkler Distance Match",
-                "Levenshtein Match",
-                "AI Advance Match",
-                "SLM Match",
-            ],
+            method_options,
         )
+        if not slm_available and slm_unavailable_reason:
+            st.caption(slm_unavailable_reason)
 
         threshold = 75
         lev_max_distance = 2
