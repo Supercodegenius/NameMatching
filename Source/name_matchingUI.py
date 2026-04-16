@@ -720,9 +720,23 @@ if "slm_bulk_warmed" not in st.session_state:
 if method_key == "slm" and not st.session_state["slm_bulk_warmed"]:
     with st.spinner("Preparing SLM model for faster matching..."):
         try:
-            from Source.namematching import warmup_slm_runtime
+            from Source import namematching as nm
 
-            warmup_slm_runtime()
+            warmup_fn = getattr(nm, "warmup_slm_runtime", None)
+            if callable(warmup_fn):
+                warmup_fn()
+            else:
+                # Compatibility path for deployments with older namematching module exports.
+                runtime_loader = getattr(nm, "_load_slm_runtime", None)
+                if not callable(runtime_loader):
+                    raise AttributeError(
+                        "warmup_slm_runtime is unavailable and _load_slm_runtime fallback is not present"
+                    )
+                runtime = runtime_loader()
+                embed_many = runtime.get("embed_many") if isinstance(runtime, dict) else None
+                if not callable(embed_many):
+                    raise AttributeError("SLM runtime did not expose an embed_many callable")
+                embed_many(["slm warmup"])
             st.session_state["slm_bulk_warmed"] = True
         except Exception as exc:
             st.warning(f"SLM warm-up could not complete: {exc}")
