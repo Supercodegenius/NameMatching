@@ -9,7 +9,41 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from difflib import SequenceMatcher
+from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterable, Literal
+
+try:
+    from Source.slm_country_codes import SLM_COUNTRY_CODE_MAP
+except Exception:
+    from slm_country_codes import SLM_COUNTRY_CODE_MAP
+
+SLM_COUNTRY_CODE_MAP.update(
+    {
+        "ae": "united arab emirates",
+        "are": "united arab emirates",
+        "gb": "united kingdom",
+        "gbr": "united kingdom",
+        "kr": "south korea",
+        "kor": "south korea",
+        "kp": "north korea",
+        "prk": "north korea",
+        "ru": "russia",
+        "rus": "russia",
+        "sa": "saudi arabia",
+        "sau": "saudi arabia",
+        "sy": "syria",
+        "syr": "syria",
+        "tr": "turkey",
+        "tur": "turkey",
+        "tw": "taiwan",
+        "twn": "taiwan",
+        "us": "united states",
+        "usa": "united states",
+        "vn": "vietnam",
+        "vnm": "vietnam",
+    }
+)
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -23,7 +57,7 @@ except Exception:
     _rf_fuzz = None
     _rf_process = None
 
-MatchMethod = Literal["exact", "fuzzy", "levenshtein", "jaro_winkler", "soundex", "ai_advanced"]
+MatchMethod = Literal["exact", "fuzzy", "levenshtein", "jaro_winkler", "soundex", "ai_advanced", "slm"]
 LevenshteinEngine = Literal["auto", "rapidfuzz", "python"]
 
 def normalize_name(value: str) -> str:
@@ -318,6 +352,17 @@ def _core_token_list(text: str) -> list[str]:
     return [tok for tok in tokens if tok not in COMMON_COMPANY_TOKENS]
 
 
+def _expand_slm_country_code(text: str, target_exact_map: dict[str, str]) -> str:
+    token = str(text).strip().lower()
+    if not token or " " in token:
+        return token
+
+    expanded = SLM_COUNTRY_CODE_MAP.get(token)
+    if expanded and expanded in target_exact_map:
+        return expanded
+    return token
+
+
 def _initials_from_tokens(tokens: list[str]) -> str:
     if not tokens:
         return ""
@@ -353,6 +398,102 @@ def ai_advanced_score(a: str, b: str) -> int:
         token,
         first_token_bonus=bool(left_first and left_first == right_first),
     )
+
+
+def _slm_lexical_guard_passes(a: str, b: str) -> bool:
+    if len(a) <= 2 or len(b) <= 2:
+        return a == b
+
+    seq_ratio = float(SequenceMatcher(None, a, b).ratio()) if a and b else 0.0
+    tokens_a = {tok for tok in a.split() if tok}
+    tokens_b = {tok for tok in b.split() if tok}
+    overlap = len(tokens_a & tokens_b)
+    overlap_ratio = (
+        overlap / max(1, min(len(tokens_a), len(tokens_b)))
+        if tokens_a and tokens_b
+        else 0.0
+    )
+    return not (seq_ratio < 0.45 and overlap == 0 and overlap_ratio == 0.0)
+
+
+@lru_cache(maxsize=1)
+def _load_slm_runtime():
+    import torch
+    import torch.nn.functional as F
+    from transformers import AutoModel, AutoTokenizer
+
+    script_dir = Path(__file__).resolve().parent
+    candidates = [
+        Path("./outputs/biencoder"),
+        script_dir / "outputs" / "biencoder",
+        script_dir.parent / "outputs" / "biencoder",
+    ]
+
+    model_dir = None
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_dir():
+            model_dir = str(candidate.resolve())
+            break
+
+    if model_dir is None:
+        checked = "\n".join(str(c.resolve()) for c in candidates)
+        raise FileNotFoundError(
+            "Could not find SLM model directory. Checked:\n"
+            f"{checked}"
+        )
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    encoder = AutoModel.from_pretrained(model_dir).to(device)
+    encoder.eval()
+    embedding_cache: dict[str, torch.Tensor] = {}
+
+    def _mean_pool(last_hidden_state, attention_mask):
+        mask = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
+        summed = torch.sum(last_hidden_state * mask, dim=1)
+        counts = torch.clamp(mask.sum(dim=1), min=1e-9)
+        return summed / counts
+
+    def _embed_many(texts: list[str], batch_size: int = 128):
+        if not texts:
+            hidden = encoder.config.hidden_size
+            return torch.empty((0, hidden), device=device)
+
+        missing_texts = [text for text in dict.fromkeys(texts) if text not in embedding_cache]
+        if missing_texts:
+            with torch.no_grad():
+                for start in range(0, len(missing_texts), batch_size):
+                    chunk = missing_texts[start:start + batch_size]
+                    encoded = tokenizer(
+                        chunk,
+                        return_tensors="pt",
+                        padding=True,
+                        truncation=True,
+                        max_length=64,
+                    )
+                    encoded = {k: v.to(device) for k, v in encoded.items()}
+                    output = encoder(**encoded)
+                    pooled = _mean_pool(output.last_hidden_state, encoded["attention_mask"])
+                    normalized = F.normalize(pooled, p=2, dim=1).detach().cpu()
+                    for i, text in enumerate(chunk):
+                        embedding_cache[text] = normalized[i]
+
+        vectors = [embedding_cache[text] for text in texts]
+        if not vectors:
+            hidden = encoder.config.hidden_size
+            return torch.empty((0, hidden), device=device)
+        return torch.stack(vectors, dim=0).to(device)
+
+    return {
+        "torch": torch,
+        "embed_many": _embed_many,
+    }
+
+
+def warmup_slm_runtime() -> None:
+    runtime = _load_slm_runtime()
+    embed_many = runtime["embed_many"]
+    embed_many(["slm warmup"])
 
 
 def _build_candidate_getter(target_normalized: list[str]) -> Callable[[str], list[int]]:
@@ -892,6 +1033,133 @@ def match_names(
                     "ai_jaro_winkler_score": best_jaro,
                     "ai_token_score": best_token,
                     "is_match": best_score >= fuzzy_threshold,
+                }
+
+            results.append({"source_name": src, **best_cache[src_n]})
+        return pd.DataFrame(results)
+
+    if method == "slm":
+        slm_runtime = _load_slm_runtime()
+        torch = slm_runtime["torch"]
+        embed_many = slm_runtime["embed_many"]
+        best_cache = {}
+        all_indices = list(range(len(target_originals)))
+        slm_shortlist_max = 80
+        slm_large_shortlist_trigger = 100
+        slm_threshold = max(0.0, min(1.0, float(fuzzy_threshold) / 100.0))
+        src_slm_query = src_norm.map(lambda n: _expand_slm_country_code(n, target_exact_map))
+        unique_source_norm = list(dict.fromkeys(src_slm_query.tolist()))
+        source_embeddings = embed_many(unique_source_norm)
+        source_embedding_map = {
+            name: source_embeddings[idx]
+            for idx, name in enumerate(unique_source_norm)
+        }
+
+        candidate_map: dict[str, list[int]] = {}
+        required_target_indices: set[int] = set()
+        for src_n in unique_source_norm:
+            if src_n in target_exact_map:
+                continue
+
+            candidate_indices = get_candidates(src_n)
+            if not candidate_indices:
+                candidate_indices = all_indices
+            elif len(candidate_indices) > slm_large_shortlist_trigger:
+                if _rf_process is not None and _rf_fuzz is not None:
+                    candidate_names = [target_normalized[idx] for idx in candidate_indices]
+                    shortlist_hits = _rf_process.extract(
+                        src_n,
+                        candidate_names,
+                        scorer=_rf_fuzz.ratio,
+                        processor=None,
+                        limit=slm_shortlist_max,
+                    )
+                    candidate_indices = [candidate_indices[int(hit[2])] for hit in shortlist_hits]
+                else:
+                    src_len = len(src_n)
+                    src_first_char = src_n[:1]
+                    candidate_indices = sorted(
+                        candidate_indices,
+                        key=lambda idx: (
+                            abs(target_lengths[idx] - src_len),
+                            0 if target_normalized[idx][:1] == src_first_char else 1,
+                        ),
+                    )[:slm_shortlist_max]
+
+            candidate_map[src_n] = candidate_indices
+            required_target_indices.update(candidate_indices)
+
+        if required_target_indices:
+            required_index_list = sorted(required_target_indices)
+            required_target_texts = [target_normalized[idx] for idx in required_index_list]
+            required_target_embeddings = embed_many(required_target_texts)
+            required_index_to_pos = {
+                idx: pos for pos, idx in enumerate(required_index_list)
+            }
+            candidate_pos_map = {
+                src_n: [required_index_to_pos[idx] for idx in idx_list]
+                for src_n, idx_list in candidate_map.items()
+            }
+        else:
+            required_target_embeddings = torch.empty(
+                (0, source_embeddings.shape[1]),
+                device=source_embeddings.device,
+            )
+            required_index_to_pos = {}
+            candidate_pos_map = {}
+
+        for src, src_n, src_query_n in zip(src_series, src_norm, src_slm_query):
+            if src_n not in best_cache:
+                exact_match = target_exact_map.get(src_query_n)
+                if exact_match is not None:
+                    best_cache[src_n] = {
+                        "source_normalized": src_n,
+                        "slm_query_normalized": src_query_n,
+                        "matched_name": exact_match,
+                        "score": 100,
+                        "slm_score": 1.0,
+                        "slm_raw_score": 1.0,
+                        "slm_guard_passed": True,
+                        "is_match": True,
+                    }
+                    results.append({"source_name": src, **best_cache[src_n]})
+                    continue
+
+                candidate_indices = candidate_map.get(src_query_n, all_indices)
+
+                best_name = ""
+                best_slm_score = -1.0
+                best_target_norm = ""
+
+                src_embedding = source_embedding_map[src_query_n]
+                if candidate_indices:
+                    candidate_positions = candidate_pos_map.get(src_query_n)
+                    if candidate_positions is None:
+                        candidate_positions = [required_index_to_pos[idx] for idx in candidate_indices]
+                    candidate_tensor = required_target_embeddings[candidate_positions]
+                    similarities = torch.matmul(candidate_tensor, src_embedding)
+                    best_pos = int(torch.argmax(similarities).item())
+                    best_idx = candidate_indices[best_pos]
+                    best_slm_score = float(similarities[best_pos].item())
+                    if best_slm_score < -1.0:
+                        best_slm_score = -1.0
+                    elif best_slm_score > 1.0:
+                        best_slm_score = 1.0
+                    best_name = target_originals[best_idx]
+                    best_target_norm = target_normalized[best_idx]
+
+                guard_ok = _slm_lexical_guard_passes(src_query_n, best_target_norm)
+                score_0_100 = int(round((best_slm_score + 1.0) * 50.0))
+                is_final_match = best_slm_score >= slm_threshold and guard_ok
+                best_cache[src_n] = {
+                    "source_normalized": src_n,
+                    "slm_query_normalized": src_query_n,
+                    "matched_name": best_name if is_final_match else "",
+                    "score": score_0_100 if is_final_match else 0,
+                    "slm_score": best_slm_score if is_final_match else 0.0,
+                    "slm_raw_score": best_slm_score,
+                    "slm_guard_passed": guard_ok,
+                    "is_match": is_final_match,
                 }
 
             results.append({"source_name": src, **best_cache[src_n]})
