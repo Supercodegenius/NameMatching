@@ -217,15 +217,29 @@ st.markdown(
       div[data-testid="stSidebar"] div[role="radiogroup"] input:checked + div {
         color: #ffffff !important;
       }
-      div[data-testid="stSidebar"] .stButton > button {
-        justify-content: flex-start;
-        text-align: left;
-        padding-left: 1rem;
-      }
+            div[data-testid="stSidebarUserContent"] {
+                padding-top: 0.3rem;
+            }
+            .nm-sidebar-menu {
+                margin-top: -0.65rem;
+                margin-bottom: 0.25rem;
+            }
+            div[data-testid="stSidebar"] .stButton > button {
+                justify-content: flex-start;
+                text-align: left;
+                padding: 0.3rem 1rem;
+                min-height: 2.05rem;
+            }
       div[data-testid="stSidebar"] .stButton > button span {
         width: 100%;
         text-align: left;
       }
+            div[data-testid="stSidebar"] .stButton {
+                margin-bottom: 0.2rem;
+            }
+            div[data-testid="stSidebar"] .stButton:first-of-type {
+                margin-top: -0.15rem;
+            }
       .nm-chat-quick {
         margin-top: 0.35rem;
         margin-bottom: 0.25rem;
@@ -604,6 +618,7 @@ def run_matching_staged(
 
 
 with st.sidebar:
+    st.markdown('<div class="nm-sidebar-menu">', unsafe_allow_html=True)
     menu_options = {
         "Data Upload": "📥 Data Upload",
         "Name Matching": "🔎 Name Matching",
@@ -628,6 +643,7 @@ with st.sidebar:
         ):
             st.session_state["sidebar_menu"] = key
             st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
     sidebar_menu = st.session_state["sidebar_menu"]
 
 if sidebar_menu == "SLM":
