@@ -8,6 +8,7 @@ import os
 import runpy
 import base64
 import json
+import importlib.util
 import sqlite3
 import xml.etree.ElementTree as ET
 from io import BytesIO
@@ -390,6 +391,18 @@ def _clean_display_path(path: str) -> str:
 
 
 def _slm_matching_available() -> tuple[bool, str | None]:
+    missing_deps = []
+    for module_name in ("torch", "transformers"):
+        if importlib.util.find_spec(module_name) is None:
+            missing_deps.append(module_name)
+    if missing_deps:
+        return (
+            False,
+            "SLM dependencies are missing: "
+            + ", ".join(missing_deps)
+            + ". Add them to requirements.txt and redeploy.",
+        )
+
     try:
         from Source import namematching as nm
     except Exception as exc:
@@ -769,7 +782,13 @@ if method_key == "slm" and not st.session_state["slm_bulk_warmed"]:
                 embed_many(["slm warmup"])
             st.session_state["slm_bulk_warmed"] = True
         except Exception as exc:
-            st.warning(f"SLM warm-up could not complete: {exc}")
+            if isinstance(exc, ModuleNotFoundError):
+                st.warning(
+                    "SLM warm-up could not complete because required dependencies are missing "
+                    f"({exc}). Install/update requirements and redeploy."
+                )
+            else:
+                st.warning(f"SLM warm-up could not complete: {exc}")
 
 if sidebar_menu == "Data Upload":
     st.subheader("Data Upload")
