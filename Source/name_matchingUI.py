@@ -727,28 +727,6 @@ with st.sidebar:
     slm_health = _slm_health_status()
     slm_available, slm_unavailable_reason = _slm_matching_available()
 
-    with st.expander("SLM Health", expanded=False):
-        if bool(slm_health.get("ready", False)):
-            st.success("SLM runtime is ready.")
-        else:
-            st.warning(str(slm_health.get("reason") or "SLM is not ready."))
-
-        dep_status = slm_health.get("dependency_status", {})
-        for dep_name, is_ok in dep_status.items():
-            st.write(f"{dep_name}: {'OK' if is_ok else 'Missing'}")
-
-        available_model_dir = slm_health.get("available_model_dir")
-        if available_model_dir:
-            st.caption(f"Model directory found: {available_model_dir}")
-        else:
-            st.caption("Model directory not found. Checked:")
-            for candidate in slm_health.get("model_candidates", []):
-                st.caption(candidate)
-
-        backend_import_error = slm_health.get("backend_import_error")
-        if backend_import_error:
-            st.caption(f"Backend import error: {backend_import_error}")
-
     with st.expander("Matching settings", expanded=True):
         method_options = [
             "Exact Match",
