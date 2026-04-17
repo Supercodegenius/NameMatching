@@ -772,6 +772,10 @@ with st.sidebar:
             value=False,
             disabled=not _is_control_enabled("show_only_matches_checkbox"),
         )
+        show_unmatched_rows = st.checkbox(
+            "Show unmatched rows",
+            value=False,
+        )
         max_rows_to_render = st.slider("Rows to render in UI tables", 100, 5000, 1000, 100)
 
     with st.expander("Debug", expanded=False):
@@ -1382,6 +1386,8 @@ if full_result_df is None:
 result_df = full_result_df
 if show_only_matches and "is_match" in full_result_df.columns:
     result_df = full_result_df[full_result_df["is_match"]].copy()
+elif show_unmatched_rows and "is_match" in full_result_df.columns:
+    result_df = full_result_df[~full_result_df["is_match"]].copy()
 
 result_df_view = result_df.head(int(max_rows_to_render))
 if len(result_df) > len(result_df_view):
