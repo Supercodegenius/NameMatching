@@ -353,14 +353,29 @@ def _core_token_list(text: str) -> list[str]:
 
 
 def _expand_slm_country_code(text: str, target_exact_map: dict[str, str]) -> str:
-    token = str(text).strip().lower()
-    if not token or " " in token:
-        return token
+    text = str(text).strip().lower()
+    if not text:
+        return text
 
-    expanded = SLM_COUNTRY_CODE_MAP.get(token)
-    if expanded and expanded in target_exact_map:
-        return expanded
-    return token
+    # Single-token: if the entire string is a country code that expands to a known target, swap it.
+    if " " not in text:
+        expanded = SLM_COUNTRY_CODE_MAP.get(text)
+        if expanded and expanded in target_exact_map:
+            return expanded
+        return text
+
+    # Multi-word phrase: expand any token that is a known country code within the phrase.
+    tokens = text.split()
+    expanded_tokens = []
+    changed = False
+    for tok in tokens:
+        expansion = SLM_COUNTRY_CODE_MAP.get(tok)
+        if expansion:
+            expanded_tokens.append(expansion)
+            changed = True
+        else:
+            expanded_tokens.append(tok)
+    return " ".join(expanded_tokens) if changed else text
 
 
 def _initials_from_tokens(tokens: list[str]) -> str:
