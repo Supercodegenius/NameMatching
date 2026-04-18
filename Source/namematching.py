@@ -105,9 +105,10 @@ _LEGAL_SUFFIXES = {
 def normalize_name(value: str) -> str:
     """Normalize names for more reliable comparisons."""
     text = str(value).strip().lower()
+    text = re.sub(r"[\u2010-\u2015\u2212\u002d]", " ", text)  # replace hyphens/dashes with space before encoding
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
-    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
     text = _canonicalize_terminal_legal_suffix(text)
     tokens = [t for t in text.split() if t not in _LEGAL_SUFFIXES]
     return " ".join(tokens)

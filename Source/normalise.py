@@ -51,6 +51,7 @@ def canonicalize_terminal_legal_suffix(s):
 
 def clean_text(s):
     s = s.lower().strip()
+    s = re.sub(r"[\u2010-\u2015\u2212\u002d]", " ", s)  # replace hyphens/dashes with space before encoding
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
     s = re.sub(r"[^a-z0-9 ]+", " ", s)
     s = re.sub(r"\s+", " ", s)
