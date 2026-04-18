@@ -95,13 +95,22 @@ def _canonicalize_terminal_legal_suffix(text: str) -> str:
         normalized = re.sub(rf"\b{variant}\b$", canonical, normalized)
     return normalized
 
+_LEGAL_SUFFIXES = {
+    "ltd", "limited", "plc", "llc", "inc", "corp", "co", "company",
+    "ag", "sa", "spa", "gmbh", "bv", "nv", "oy", "ab",
+    "pte", "pvt", "kg", "kgaa", "sas", "sarl", "llp", "lp",
+}
+
+
 def normalize_name(value: str) -> str:
     """Normalize names for more reliable comparisons."""
     text = str(value).strip().lower()
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     text = re.sub(r"\s+", " ", text)
-    return _canonicalize_terminal_legal_suffix(text)
+    text = _canonicalize_terminal_legal_suffix(text)
+    tokens = [t for t in text.split() if t not in _LEGAL_SUFFIXES]
+    return " ".join(tokens)
 
 
 def fuzzy_score(a: str, b: str) -> int:
