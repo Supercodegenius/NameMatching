@@ -689,6 +689,7 @@ with st.sidebar:
     menu_options = {
         "Data Upload": "📥 Data Upload",
         "Name Matching": "🔎 Name Matching",
+        "Bulk Name Matching": "📦 Bulk Name Matching",
         "ReLink": "🔁 ReLink",
         "Tower Matching": "🗼 Tower Matching",
         "Admin": "⚙️ Admin",
@@ -715,6 +716,10 @@ with st.sidebar:
 
 if sidebar_menu == "SLM":
     runpy.run_path(os.path.join(BASE_DIR, "slm_ui.py"), run_name="__main__")
+    st.stop()
+
+if sidebar_menu == "Bulk Name Matching":
+    runpy.run_path(os.path.join(BASE_DIR, "bulknamematchingUI.py"), run_name="__main__")
     st.stop()
 
 with st.sidebar:
