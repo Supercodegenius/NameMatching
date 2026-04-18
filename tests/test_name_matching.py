@@ -16,6 +16,16 @@ def test_normalize_name_basic():
     assert normalize_name("  Li   Wei  ") == "li wei"
 
 
+def test_normalize_name_legal_suffix_variants():
+    assert normalize_name("ENI SPA") == "eni spa"
+    assert normalize_name("ENI S.P.A.") == "eni spa"
+
+
+def test_normalize_name_accent_variants():
+    assert normalize_name("HYDRO QUEBEC") == "hydro quebec"
+    assert normalize_name("HYDRO-QUÉBEC") == "hydro quebec"
+
+
 def test_levenshtein_distance_known_values():
     assert levenshtein_distance("", "") == 0
     assert levenshtein_distance("", "abc") == 3
@@ -63,6 +73,24 @@ def test_match_names_exact_normalized():
     assert bool(john_row["is_match"]) is False
     assert john_row["matched_name"] == ""
     assert john_row["score"] == 0
+
+
+def test_match_names_exact_matches_legal_suffix_variants():
+    df = match_names(["ENI SPA"], ["ENI S.P.A."], method="exact")
+
+    row = df.iloc[0]
+    assert bool(row["is_match"]) is True
+    assert row["matched_name"] == "ENI S.P.A."
+    assert int(row["score"]) == 100
+
+
+def test_match_names_exact_matches_accent_variants():
+    df = match_names(["HYDRO QUEBEC"], ["HYDRO-QUÉBEC"], method="exact")
+
+    row = df.iloc[0]
+    assert bool(row["is_match"]) is True
+    assert row["matched_name"] == "HYDRO-QUÉBEC"
+    assert int(row["score"]) == 100
 
 
 def test_match_names_fuzzy_best_match_thresholding():

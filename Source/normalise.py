@@ -15,12 +15,46 @@ REINSURANCE_TERMS = [
 import unicodedata
 import re
 
+TERMINAL_LEGAL_SUFFIX_VARIANTS = {
+    "a g": "ag",
+    "c o": "co",
+    "b v": "bv",
+    "c o m p a n y": "company",
+    "g m b h": "gmbh",
+    "k g": "kg",
+    "k g a a": "kgaa",
+    "l l c": "llc",
+    "l l p": "llp",
+    "l p": "lp",
+    "l t d": "ltd",
+    "n v": "nv",
+    "o y": "oy",
+    "p l c": "plc",
+    "p t e": "pte",
+    "p v t": "pvt",
+    "s p z o o": "spzoo",
+    "s a": "sa",
+    "s a r l": "sarl",
+    "s a s": "sas",
+    "s p a": "spa",
+}
+
+
+def canonicalize_terminal_legal_suffix(s):
+    normalized = str(s or "").strip()
+    if not normalized:
+        return ""
+
+    for variant, canonical in TERMINAL_LEGAL_SUFFIX_VARIANTS.items():
+        normalized = re.sub(rf"\b{variant}\b$", canonical, normalized)
+    return normalized
+
 def clean_text(s):
     s = s.lower().strip()
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
     s = re.sub(r"[^a-z0-9 ]+", " ", s)
     s = re.sub(r"\s+", " ", s)
-    return s
+    return canonicalize_terminal_legal_suffix(s)
 
 def remove_terms(s, terms):
     tokens = s.split()

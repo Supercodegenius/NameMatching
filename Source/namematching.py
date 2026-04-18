@@ -7,6 +7,7 @@ from __future__ import annotations
 # Developed By Ambuj Kumar
 
 import re
+import unicodedata
 from collections import defaultdict
 from difflib import SequenceMatcher
 from functools import lru_cache
@@ -60,12 +61,47 @@ except Exception:
 MatchMethod = Literal["exact", "fuzzy", "levenshtein", "jaro_winkler", "soundex", "ai_advanced", "slm"]
 LevenshteinEngine = Literal["auto", "rapidfuzz", "python"]
 
+_TERMINAL_LEGAL_SUFFIX_VARIANTS = {
+    "a g": "ag",
+    "c o": "co",
+    "b v": "bv",
+    "c o m p a n y": "company",
+    "g m b h": "gmbh",
+    "k g": "kg",
+    "k g a a": "kgaa",
+    "l l c": "llc",
+    "l l p": "llp",
+    "l p": "lp",
+    "l t d": "ltd",
+    "n v": "nv",
+    "o y": "oy",
+    "p l c": "plc",
+    "p t e": "pte",
+    "p v t": "pvt",
+    "s p z o o": "spzoo",
+    "s a": "sa",
+    "s a r l": "sarl",
+    "s a s": "sas",
+    "s p a": "spa",
+}
+
+
+def _canonicalize_terminal_legal_suffix(text: str) -> str:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return ""
+
+    for variant, canonical in _TERMINAL_LEGAL_SUFFIX_VARIANTS.items():
+        normalized = re.sub(rf"\b{variant}\b$", canonical, normalized)
+    return normalized
+
 def normalize_name(value: str) -> str:
     """Normalize names for more reliable comparisons."""
     text = str(value).strip().lower()
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     text = re.sub(r"\s+", " ", text)
-    return text
+    return _canonicalize_terminal_legal_suffix(text)
 
 
 def fuzzy_score(a: str, b: str) -> int:
