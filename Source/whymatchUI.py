@@ -308,7 +308,7 @@ html(
 
                 <div class="wm-grid">
                   <article class="wm-card">
-                    <div class="wm-icon"><span class="wm-icon-check">âœ“</span></div>
+                    <div class="wm-icon"><span class="wm-icon-check">&#10003;</span></div>
                     <h2>Now</h2>
                     <ul class="wm-list">
                       <li>Multi-Method Matching (6 Methods)</li>
@@ -317,7 +317,7 @@ html(
                     </ul>
                   </article>
                   <article class="wm-card">
-                    <div class="wm-icon"><span class="wm-icon-sun">âœ¶</span></div>
+                    <div class="wm-icon"><span class="wm-icon-sun">&#10038;</span></div>
                     <h2>Soon</h2>
                     <ul class="wm-list">
                       <li>Batch Processing</li>
