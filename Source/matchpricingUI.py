@@ -405,22 +405,53 @@ def _open_login_flow(flow: str = "payg") -> None:
     st.session_state["pricing_show_login_dialog"] = True
     st.rerun()
 
-
-cta_col1, cta_col2, cta_col3 = st.columns(3, gap="small")
-with cta_col1:
-    if st.button("Get Started", type="primary", use_container_width=True, key="pricing_cta_payg"):
-        _open_login_flow("payg")
-with cta_col2:
-    if st.button(
-        "Get Started",
-        type="secondary",
-        use_container_width=True,
-        key="pricing_cta_sub",
-    ):
-        _open_login_flow("subscription")
-with cta_col3:
-    if st.button("Get Started", type="secondary", use_container_width=True, key="pricing_cta_enterprise"):
-        _open_login_flow("subscription")
+st.markdown(
+        dedent(
+                """
+                <style>
+                    .pricing-shell .pricing-cta-grid {
+                        display: grid;
+                        grid-template-columns: repeat(3, minmax(0, 1fr));
+                        gap: 1.1rem;
+                        margin-top: 0.8rem;
+                    }
+                    .pricing-shell .pricing-cta-btn {
+                        display: block;
+                        width: 100%;
+                        box-sizing: border-box;
+                        text-align: center;
+                        text-decoration: none !important;
+                        border-radius: 0.65rem;
+                        border: 1px solid rgba(0, 0, 0, 0.04);
+                        background: linear-gradient(180deg, #0f62ff, #084dce);
+                        color: #ffffff !important;
+                        font-family: "Plus Jakarta Sans", sans-serif;
+                        font-size: 0.96rem;
+                        font-weight: 700;
+                        padding: 0.82rem 1.15rem;
+                        box-shadow: 0 8px 16px rgba(15, 98, 255, 0.22);
+                    }
+                    .pricing-shell .pricing-cta-btn:hover {
+                        color: #ffffff !important;
+                        filter: brightness(1.02);
+                    }
+                    @media (max-width: 900px) {
+                        .pricing-shell .pricing-cta-grid {
+                            grid-template-columns: 1fr;
+                        }
+                    }
+                </style>
+                <section class="pricing-shell">
+                    <div class="pricing-cta-grid">
+                        <a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=payg" target="_self">Get Started</a>
+                        <a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=subscription" target="_self">Get Started</a>
+                        <a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=subscription" target="_self">Get Started</a>
+                    </div>
+                </section>
+                """
+        ),
+        unsafe_allow_html=True,
+)
 
 
 pricing_flow = str(st.query_params.get("pricing_flow", "")).strip().lower()
