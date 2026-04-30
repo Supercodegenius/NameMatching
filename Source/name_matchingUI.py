@@ -288,7 +288,7 @@ st.markdown(
         <h1 style="margin:0;">AI Powered Name Matching</h1>
         <div class="nm-powered-by">By BrainCal Tech Team <a href="https://braincal.com" target="_blank" rel="noopener noreferrer">https://braincal.com</a></div>
       </div>
-      <p>Enterprise-grade name matching with exact, fuzzy, Soundex, Jaro-Winkler, Levenshtein, and AI Advance methods.</p>
+      <p>Enterprise-grade name matching with ENCCLT, FNCCLT, SNCCLT, JNCCLT, LNCCLT, AINCCLT, and SLM methods.</p>
       <div class="nm-chip-row">
         <span class="nm-chip">Operational Data Quality</span>
         <span class="nm-chip">Customer Record Matching</span>
@@ -734,12 +734,12 @@ with st.sidebar:
 
     with st.expander("Matching settings", expanded=True):
         method_options = [
-            "Exact Match",
-            "Fuzzy Match",
-            "Soundex Match",
-            "Jaro-Winkler Distance Match",
-            "Levenshtein Match",
-            "AI Advance Match",
+            "ENCCLT Match",
+            "FNCCLT Match",
+            "SNCCLT Match",
+            "JNCCLT Match",
+            "LNCCLT Match",
+            "AINCCLT Match",
         ]
         if slm_available:
             method_options.append("SLM Match")
@@ -754,9 +754,9 @@ with st.sidebar:
         threshold = 75
         lev_max_distance = 2
         lev_engine = "auto"
-        if method in {"Fuzzy Match", "Jaro-Winkler Distance Match", "AI Advance Match", "SLM Match"}:
+        if method in {"FNCCLT Match", "JNCCLT Match", "AINCCLT Match", "SLM Match"}:
             threshold = st.slider("Fuzzy threshold", 0, 100, 75, 1)
-        if method == "Levenshtein Match":
+        if method == "LNCCLT Match":
             lev_max_distance = st.slider("Levenshtein max distance", 0, 10, 2, 1)
             lev_engine = st.selectbox(
                 "Levenshtein engine",
@@ -788,12 +788,12 @@ with st.sidebar:
         st.caption(f"mtime: `{_file_mtime_iso(__file__)}`")
 
 method_key = {
-    "Exact Match": "exact",
-    "Fuzzy Match": "fuzzy",
-    "Soundex Match": "soundex",
-    "Jaro-Winkler Distance Match": "jaro_winkler",
-    "Levenshtein Match": "levenshtein",
-    "AI Advance Match": "ai_advanced",
+    "ENCCLT Match": "exact",
+    "FNCCLT Match": "fuzzy",
+    "SNCCLT Match": "soundex",
+    "JNCCLT Match": "jaro_winkler",
+    "LNCCLT Match": "levenshtein",
+    "AINCCLT Match": "ai_advanced",
     "SLM Match": "slm",
 }[method]
 
