@@ -413,7 +413,7 @@ st.markdown(
                         display: grid;
                         grid-template-columns: repeat(3, minmax(0, 1fr));
                         gap: 1.1rem;
-                        margin-top: 0.8rem;
+                        margin-top: 0.12rem;
                     }
                     .pricing-shell .pricing-cta-btn {
                         display: block;
@@ -435,6 +435,32 @@ st.markdown(
                         color: #ffffff !important;
                         filter: brightness(1.02);
                     }
+                    .pricing-shell .pricing-back-row {
+                        display: grid;
+                        grid-template-columns: 1fr 1fr 1fr;
+                        gap: 1.1rem;
+                        margin-top: 0.38rem;
+                    }
+                    .pricing-shell .pricing-back-btn {
+                        display: block;
+                        width: 100%;
+                        box-sizing: border-box;
+                        text-align: center;
+                        text-decoration: none !important;
+                        border-radius: 0.65rem;
+                        border: 1px solid rgba(0, 0, 0, 0.04);
+                        background: linear-gradient(180deg, #0f62ff, #084dce);
+                        color: #ffffff !important;
+                        font-family: "Plus Jakarta Sans", sans-serif;
+                        font-size: 0.96rem;
+                        font-weight: 700;
+                        padding: 0.82rem 1.15rem;
+                        box-shadow: 0 8px 16px rgba(15, 98, 255, 0.22);
+                    }
+                    .pricing-shell .pricing-back-btn:hover {
+                        color: #ffffff !important;
+                        filter: brightness(1.02);
+                    }
                     @media (max-width: 900px) {
                         .pricing-shell .pricing-cta-grid {
                             grid-template-columns: 1fr;
@@ -446,6 +472,11 @@ st.markdown(
                         <a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=payg" target="_self">Get Started</a>
                         <a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=subscription" target="_self">Get Started</a>
                         <a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=subscription" target="_self">Get Started</a>
+                    </div>
+                    <div class="pricing-back-row">
+                        <div></div>
+                        <a class="pricing-back-btn" href="?page=landing" target="_self">Back To Landing</a>
+                        <div></div>
                     </div>
                 </section>
                 """
@@ -603,11 +634,3 @@ if st.session_state.get("pricing_show_login_dialog") or bool(pricing_flow):
     st.session_state["pricing_show_login_dialog"] = True
     _pricing_login_dialog()
 
-left_spacer, button_col, right_spacer = st.columns([4, 2, 4])
-with button_col:
-    if st.button("Back to Landing", type="primary", use_container_width=True, key="pricing_back_to_landing"):
-        st.query_params["page"] = "landing"
-        if "pricing_flow" in st.query_params:
-            del st.query_params["pricing_flow"]
-        st.session_state["pricing_show_login_dialog"] = False
-        st.rerun()
