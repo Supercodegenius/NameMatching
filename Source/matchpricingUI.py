@@ -340,53 +340,49 @@ st.markdown(
 )
 
 st.markdown(
-    """
-    <section class="pricing-shell">
-      <header class="pricing-header">
-        <h1>Pricing model</h1>
-        <p>
-          A simple, transparent subscription with included records, plus overage when you exceed your plan.
-          Use the setup flow to estimate costs and track usage snapshots.
-        </p>
-      </header>
+        dedent(
+                """
+                <section class="pricing-shell">
+                    <header class="pricing-header">
+                        <h1>Re<span style="color:#0f62ff;">Match</span> Pricing</h1>
+                        <p>Easy to start, scalable later.</p>
+                    </header>
 
-      <div class="pricing-grid">
-        <article class="pricing-card">
-          <h3>Starter</h3>
-          <p class="price">GBP 399</p>
-          <p class="meta">Includes 50,000 records/month</p>
-          <ul class="pricing-list">
-            <li>Access to all matching methods</li>
-            <li>Download matched output</li>
-            <li>Email support</li>
-          </ul>
-        </article>
+                    <div class="pricing-grid">
+                        <article class="pricing-card">
+                            <h3>Pay As You Go</h3>
+                            <p class="meta">Test with your own data</p>
+                            <ul class="pricing-list">
+                                <li>0.5 GBP/search</li>
+                                <li>No integration required</li>
+                            </ul>
+                        </article>
 
-        <article class="pricing-card">
-          <h3>Growth</h3>
-          <p class="price">GBP 899</p>
-          <p class="meta">Includes 250,000 records/month</p>
-          <ul class="pricing-list">
-            <li>Priority processing</li>
-            <li>Usage snapshots</li>
-            <li>Team onboarding</li>
-          </ul>
-        </article>
+                        <article class="pricing-card">
+                            <h3>Subscription</h3>
+                            <p class="meta">For teams ready to scale</p>
+                            <ul class="pricing-list">
+                                <li>Annual-usage based pricing</li>
+                                <li>Lower effective rate per search</li>
+                                <li>Agreed credit</li>
+                                <li>20% upfront discount</li>
+                            </ul>
+                        </article>
 
-        <article class="pricing-card">
-          <h3>Enterprise</h3>
-          <p class="price">Custom</p>
-          <p class="meta">High volume + bespoke integration</p>
-          <ul class="pricing-list">
-            <li>Dedicated support</li>
-            <li>Custom workflows</li>
-            <li>Security review</li>
-          </ul>
-        </article>
-      </div>
-    </section>
-    """,
-    unsafe_allow_html=True,
+                        <article class="pricing-card">
+                            <h3>Enterprise</h3>
+                            <p class="meta">Full platform integration</p>
+                            <ul class="pricing-list">
+                                <li>API access</li>
+                                <li>Role-based access control</li>
+                                <li>Audit logs</li>
+                            </ul>
+                        </article>
+                    </div>
+                </section>
+                """
+        ),
+        unsafe_allow_html=True,
 )
 
 if st.session_state.get("pricing_persistence_ok") is False:
@@ -404,7 +400,7 @@ if "pricing_user_email" not in st.session_state:
 
 
 def _open_login_flow(flow: str = "payg") -> None:
-    st.query_params["page"] = "pricing"
+    st.query_params["page"] = "rematchpricing"
     st.query_params["pricing_flow"] = flow
     st.session_state["pricing_show_login_dialog"] = True
     st.rerun()
@@ -412,27 +408,24 @@ def _open_login_flow(flow: str = "payg") -> None:
 
 cta_col1, cta_col2, cta_col3 = st.columns(3, gap="small")
 with cta_col1:
-    if st.button("Estimate PAYG", type="primary", use_container_width=True, key="pricing_cta_payg"):
+    if st.button("Get Started", type="primary", use_container_width=True, key="pricing_cta_payg"):
         _open_login_flow("payg")
 with cta_col2:
     if st.button(
-        "Estimate Subscription",
+        "Get Started",
         type="secondary",
         use_container_width=True,
         key="pricing_cta_sub",
     ):
         _open_login_flow("subscription")
 with cta_col3:
-    if st.button("Back to Landing", type="secondary", use_container_width=True, key="pricing_back"):
-        st.query_params["page"] = "landing"
-        if "pricing_flow" in st.query_params:
-            del st.query_params["pricing_flow"]
-        st.rerun()
+    if st.button("Get Started", type="secondary", use_container_width=True, key="pricing_cta_enterprise"):
+        _open_login_flow("subscription")
 
 
 pricing_flow = str(st.query_params.get("pricing_flow", "")).strip().lower()
 if pricing_flow:
-    st.query_params["page"] = "pricing"
+    st.query_params["page"] = "rematchpricing"
 
 
 @st.dialog("Pricing setup", width="large")
