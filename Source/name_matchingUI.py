@@ -9,6 +9,7 @@ import runpy
 import base64
 import json
 import importlib.util
+import re
 import sqlite3
 import xml.etree.ElementTree as ET
 from io import BytesIO
@@ -55,7 +56,32 @@ st.markdown(
           radial-gradient(900px 420px at 100% 0%, #dde8fb 0%, transparent 55%),
           linear-gradient(180deg, #edf2f9 0%, var(--nm-page-bg) 55%);
       }
-      .block-container { padding-top: 0.9rem; padding-bottom: 1.6rem; }
+      html, body { margin: 0; }
+
+      /* Remove Streamlit's default top chrome / padding to eliminate the grey band. */
+      div[data-testid="stHeader"],
+      header[data-testid="stHeader"],
+      div[data-testid="stToolbar"],
+      div[data-testid="stDecoration"],
+      #MainMenu,
+      footer {
+        display: none !important;
+      }
+
+      div[data-testid="stAppViewContainer"],
+      section.main,
+      div[data-testid="stAppViewContainer"] > .main,
+      section[data-testid="stMain"],
+      div[data-testid="stMain"] {
+        margin-top: 0 !important;
+        padding-top: 0 !important;
+      }
+
+      div[data-testid="stMainBlockContainer"],
+      .block-container {
+        padding-top: 0 !important;
+        padding-bottom: 1.6rem;
+      }
       .nm-hero {
         padding: 0.95rem 1.05rem 0.9rem 1.05rem;
         border: 1px solid rgba(20,50,112,0.2);
@@ -637,6 +663,12 @@ def run_matching_staged(
     """Two-stage matching: filter reference rows by location first, then match on name within those candidates."""
     from collections import defaultdict
     from Source.namematching import match_names, normalize_name, fuzzy_score
+    try:
+        from rapidfuzz import fuzz as rf_fuzz
+        from rapidfuzz import process as rf_process
+    except Exception:
+        rf_fuzz = None
+        rf_process = None
 
     left_list = list(left_values)
     left_locs_list = list(left_locs)
@@ -647,6 +679,11 @@ def run_matching_staged(
     left_locs_norm = [normalize_name(loc) for loc in left_locs_list]
     all_right_indices = list(range(len(right_list)))
 
+    tgt_loc_to_indices: dict[str, list[int]] = defaultdict(list)
+    for idx, tgt_loc_n in enumerate(right_locs_norm):
+        tgt_loc_to_indices[tgt_loc_n].append(idx)
+    unique_tgt_locs = list(tgt_loc_to_indices.keys())
+
     # Group source indices by their normalized location
     loc_to_src_indices: dict[str, list[int]] = defaultdict(list)
     for i, loc_n in enumerate(left_locs_norm):
@@ -656,10 +693,23 @@ def run_matching_staged(
     loc_to_tgt_indices: dict[str, list[int]] = {}
     for src_loc_n in loc_to_src_indices:
         if src_loc_n:
-            matched = [
-                j for j, tgt_loc_n in enumerate(right_locs_norm)
-                if tgt_loc_n and fuzzy_score(src_loc_n, tgt_loc_n) >= location_threshold
-            ]
+            matched: list[int] = []
+            if rf_process is not None and rf_fuzz is not None:
+                hits = rf_process.extract(
+                    src_loc_n,
+                    unique_tgt_locs,
+                    scorer=rf_fuzz.ratio,
+                    processor=None,
+                    score_cutoff=location_threshold,
+                    limit=None,
+                )
+                for _, _, hit_pos in hits:
+                    matched.extend(tgt_loc_to_indices[unique_tgt_locs[int(hit_pos)]])
+            else:
+                matched = [
+                    j for j, tgt_loc_n in enumerate(right_locs_norm)
+                    if tgt_loc_n and fuzzy_score(src_loc_n, tgt_loc_n) >= location_threshold
+                ]
             loc_to_tgt_indices[src_loc_n] = matched if matched else all_right_indices
         else:
             loc_to_tgt_indices[src_loc_n] = all_right_indices
@@ -1200,7 +1250,7 @@ st.markdown(
 
 up_col1, up_col2 = st.columns(2, gap="large")
 with up_col1:
-    left_file = st.file_uploader("**Source File**", type=["csv", "xlsx"])
+    left_file = st.file_uploader("\u00a0Source File", type=["csv", "xlsx"])
 with up_col2:
     right_file = st.file_uploader("**Reference File**", type=["csv", "xlsx"])
 
@@ -1335,9 +1385,40 @@ if include_industry and right_industry_col and right_industry_col != right_name_
 left_names = _compose_match_values(left_df, left_name_col, left_extra_cols)
 right_names = _compose_match_values(right_df, right_name_col, right_extra_cols)
 
-run_header_col, run_button_col = st.columns([3, 1.4], gap="small")
+if "slm_prime_signature" not in st.session_state:
+    st.session_state["slm_prime_signature"] = ""
+
+if method_key == "slm":
+    left_hash = int(pd.util.hash_pandas_object(left_names, index=False).sum()) if len(left_names) else 0
+    right_hash = int(pd.util.hash_pandas_object(right_names, index=False).sum()) if len(right_names) else 0
+    slm_prime_signature = f"{len(left_names)}:{len(right_names)}:{left_hash}:{right_hash}"
+    if st.session_state["slm_prime_signature"] != slm_prime_signature:
+        with st.spinner("Priming SLM cache for faster first run..."):
+            try:
+                from Source import namematching as nm
+
+                prime_fn = getattr(nm, "prime_slm_match_runtime", None)
+                if callable(prime_fn):
+                    prime_fn(
+                        target_names=right_names.tolist(),
+                        source_names=left_names.tolist(),
+                    )
+                else:
+                    warmup_fn = getattr(nm, "warmup_slm_runtime", None)
+                    if callable(warmup_fn):
+                        warmup_fn()
+                st.session_state["slm_prime_signature"] = slm_prime_signature
+            except Exception as exc:
+                st.caption(f"SLM pre-prime skipped: {exc}")
+
+run_header_col, run_button_col = st.columns(2, gap="small")
 with run_header_col:
-    st.subheader("Run name matching")
+    back_to_landing = st.button(
+        "Back to Landing",
+        type="primary",
+        use_container_width=True,
+        key="name_matching_back_to_landing",
+    )
 with run_button_col:
     run_now = st.button(
         "Run name matching",
@@ -1345,6 +1426,10 @@ with run_button_col:
         use_container_width=True,
         disabled=not _is_control_enabled("run_name_matching_button"),
     )
+
+if back_to_landing:
+    st.query_params["page"] = "landing"
+    st.rerun()
 
 has_results = "result_df" in st.session_state
 if run_now:
@@ -1612,8 +1697,8 @@ if sidebar_menu == "ReLink":
     st.stop()
 
 
-st.dataframe(
-    _style_matched_rows(_to_display_columns(_prepare_result_for_display(
+result_display_df = _to_display_columns(
+    _prepare_result_for_display(
         result_df_view,
         include_location=include_location,
         left_df=left_df,
@@ -1621,9 +1706,14 @@ st.dataframe(
         left_location_col=left_location_col,
         right_name_col=right_name_col,
         right_location_col=right_location_col,
-    ))),
+    )
+)
+
+st.dataframe(
+    _style_matched_rows(result_display_df),
     use_container_width=True,
     height=420,
+    key="results_table",
 )
 
 metric_col1, metric_col2, metric_col3 = st.columns(3)
