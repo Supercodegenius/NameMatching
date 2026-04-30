@@ -2,6 +2,8 @@ import os
 import csv
 import hashlib
 import json
+import tempfile
+from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
 from textwrap import dedent
@@ -10,40 +12,77 @@ import streamlit as st
 
 
 FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png.jpeg")
-PRICING_DATA_DIR = Path(__file__).resolve().parent.parent / "outputs" / "pricing"
-PRICING_USERS_FILE = PRICING_DATA_DIR / "users.json"
-PRICING_USAGE_FILE = PRICING_DATA_DIR / "usage_history.csv"
 
 
-def _ensure_pricing_storage() -> None:
-    PRICING_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if not PRICING_USERS_FILE.exists():
-        PRICING_USERS_FILE.write_text("{}", encoding="utf-8")
-    if not PRICING_USAGE_FILE.exists():
-        with PRICING_USAGE_FILE.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(
-                handle,
-                fieldnames=[
-                    "timestamp_utc",
-                    "email",
-                    "billing_cycle",
-                    "plan_name",
-                    "included_records",
-                    "usage_records",
-                    "overage_records",
-                    "base_subscription",
-                    "overage_cost",
-                    "estimated_total",
-                    "price_per_record",
-                ],
-            )
-            writer.writeheader()
+@lru_cache(maxsize=1)
+def _pricing_paths() -> tuple[Path, Path, Path, bool]:
+    """Return (data_dir, users_file, usage_file, persistent_ok).
+
+    Streamlit Community Cloud can restrict writes in the repo directory, so we
+    fall back to a temp directory when needed.
+    """
+
+    repo_dir = Path(__file__).resolve().parent.parent / "outputs" / "pricing"
+    for candidate in (
+        repo_dir,
+        Path(tempfile.gettempdir()) / "namematching" / "pricing",
+    ):
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write_test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            users_file = candidate / "users.json"
+            usage_file = candidate / "usage_history.csv"
+            return candidate, users_file, usage_file, candidate == repo_dir
+        except Exception:
+            continue
+
+    # Last resort: use temp dir but mark persistence unavailable (in-memory only).
+    fallback = Path(tempfile.gettempdir()) / "namematching" / "pricing"
+    return fallback, fallback / "users.json", fallback / "usage_history.csv", False
+
+
+def _ensure_pricing_storage() -> bool:
+    data_dir, users_file, usage_file, persistent_ok = _pricing_paths()
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        if not users_file.exists():
+            users_file.write_text("{}", encoding="utf-8")
+        if not usage_file.exists():
+            with usage_file.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "timestamp_utc",
+                        "email",
+                        "billing_cycle",
+                        "plan_name",
+                        "included_records",
+                        "usage_records",
+                        "overage_records",
+                        "base_subscription",
+                        "overage_cost",
+                        "estimated_total",
+                        "price_per_record",
+                    ],
+                )
+                writer.writeheader()
+        st.session_state["pricing_persistence_ok"] = bool(persistent_ok)
+        return True
+    except Exception as exc:
+        st.session_state["pricing_persistence_ok"] = False
+        st.session_state["pricing_persistence_error"] = str(exc)
+        return False
 
 
 def _load_pricing_users() -> dict[str, dict[str, str]]:
-    _ensure_pricing_storage()
+    if not _ensure_pricing_storage():
+        return st.session_state.get("_pricing_users", {})
+
+    _, users_file, _, _ = _pricing_paths()
     try:
-        raw = json.loads(PRICING_USERS_FILE.read_text(encoding="utf-8"))
+        raw = json.loads(users_file.read_text(encoding="utf-8"))
     except Exception:
         raw = {}
     if not isinstance(raw, dict):
@@ -52,8 +91,12 @@ def _load_pricing_users() -> dict[str, dict[str, str]]:
 
 
 def _save_pricing_users(users: dict[str, dict[str, str]]) -> None:
-    _ensure_pricing_storage()
-    PRICING_USERS_FILE.write_text(json.dumps(users, indent=2), encoding="utf-8")
+    if not _ensure_pricing_storage():
+        st.session_state["_pricing_users"] = users
+        return
+
+    _, users_file, _, _ = _pricing_paths()
+    users_file.write_text(json.dumps(users, indent=2), encoding="utf-8")
 
 
 def _hash_password(password: str) -> str:
@@ -105,8 +148,14 @@ def _update_user_profile(email: str, updates: dict[str, str]) -> None:
 
 
 def _append_usage_snapshot(snapshot: dict[str, str]) -> None:
-    _ensure_pricing_storage()
-    with PRICING_USAGE_FILE.open("a", newline="", encoding="utf-8") as handle:
+    if not _ensure_pricing_storage():
+        history = st.session_state.get("_pricing_usage_rows", [])
+        history.append({k: str(v) for k, v in snapshot.items()})
+        st.session_state["_pricing_usage_rows"] = history
+        return
+
+    _, _, usage_file, _ = _pricing_paths()
+    with usage_file.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,
             fieldnames=[
@@ -127,9 +176,18 @@ def _append_usage_snapshot(snapshot: dict[str, str]) -> None:
 
 
 def _load_usage_snapshots(email: str, limit: int = 8) -> list[dict[str, str]]:
-    _ensure_pricing_storage()
+    if not _ensure_pricing_storage():
+        rows = st.session_state.get("_pricing_usage_rows", [])
+        filtered = [
+            {str(k): str(v) for k, v in row.items()}
+            for row in rows
+            if str(row.get("email", "")).strip().lower() == email.strip().lower()
+        ]
+        return list(reversed(filtered[-limit:]))
+
     rows: list[dict[str, str]] = []
-    with PRICING_USAGE_FILE.open("r", newline="", encoding="utf-8") as handle:
+    _, _, usage_file, _ = _pricing_paths()
+    with usage_file.open("r", newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
             if str(row.get("email", "")).strip().lower() == email.strip().lower():
@@ -331,6 +389,12 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+if st.session_state.get("pricing_persistence_ok") is False:
+    st.caption(
+        "Note: pricing usage snapshots are running in session-only mode in this deployment "
+        "(storage is not writable)."
+    )
+
 if "pricing_show_login_dialog" not in st.session_state:
     st.session_state["pricing_show_login_dialog"] = False
 if "pricing_logged_in" not in st.session_state:
@@ -514,4 +578,3 @@ def _pricing_login_dialog() -> None:
 if st.session_state.get("pricing_show_login_dialog") or bool(pricing_flow):
     st.session_state["pricing_show_login_dialog"] = True
     _pricing_login_dialog()
-
