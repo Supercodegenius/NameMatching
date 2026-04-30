@@ -340,49 +340,49 @@ st.markdown(
 )
 
 st.markdown(
-        dedent(
-                """
-                <section class="pricing-shell">
-                    <header class="pricing-header">
-                        <h1>Re<span style="color:#0f62ff;">Match</span> Pricing</h1>
-                        <p>Easy to start, scalable later.</p>
-                    </header>
+    dedent(
+        """
+<section class="pricing-shell">
+<header class="pricing-header">
+<h1>Re<span style="color:#0f62ff;">Match</span> Pricing</h1>
+<p>Easy to start, scalable later.</p>
+</header>
 
-                    <div class="pricing-grid">
-                        <article class="pricing-card">
-                            <h3>Pay As You Go</h3>
-                            <p class="meta">Test with your own data</p>
-                            <ul class="pricing-list">
-                                <li>0.5 GBP/search</li>
-                                <li>No integration required</li>
-                            </ul>
-                        </article>
+<div class="pricing-grid">
+<article class="pricing-card">
+<h3>Pay As You Go</h3>
+<p class="meta">Test with your own data</p>
+<ul class="pricing-list">
+<li>0.5 GBP/search</li>
+<li>No integration required</li>
+</ul>
+</article>
 
-                        <article class="pricing-card">
-                            <h3>Subscription</h3>
-                            <p class="meta">For teams ready to scale</p>
-                            <ul class="pricing-list">
-                                <li>Annual-usage based pricing</li>
-                                <li>Lower effective rate per search</li>
-                                <li>Agreed credit</li>
-                                <li>20% upfront discount</li>
-                            </ul>
-                        </article>
+<article class="pricing-card">
+<h3>Subscription</h3>
+<p class="meta">For teams ready to scale</p>
+<ul class="pricing-list">
+<li>Annual-usage based pricing</li>
+<li>Lower effective rate per search</li>
+<li>Agreed credit</li>
+<li>20% upfront discount</li>
+</ul>
+</article>
 
-                        <article class="pricing-card">
-                            <h3>Enterprise</h3>
-                            <p class="meta">Full platform integration</p>
-                            <ul class="pricing-list">
-                                <li>API access</li>
-                                <li>Role-based access control</li>
-                                <li>Audit logs</li>
-                            </ul>
-                        </article>
-                    </div>
-                </section>
-                """
-        ),
-        unsafe_allow_html=True,
+<article class="pricing-card">
+<h3>Enterprise</h3>
+<p class="meta">Full platform integration</p>
+<ul class="pricing-list">
+<li>API access</li>
+<li>Role-based access control</li>
+<li>Audit logs</li>
+</ul>
+</article>
+</div>
+</section>
+        """
+    ),
+    unsafe_allow_html=True,
 )
 
 if st.session_state.get("pricing_persistence_ok") is False:
