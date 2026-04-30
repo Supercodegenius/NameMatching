@@ -93,7 +93,7 @@ st.markdown(
       <nav class="landing-nav">
         <div class="brand-wrap">
           <img class="brand-logo" src="{logo_data_uri}" alt="ReMatch" />
-          <span class="brand-dot">â€¢</span>
+          <span class="brand-dot">&bull;</span>
           <span class="brand-tagline">AI-Powered Insured Name Matching for Reinsurance</span>
         </div>
         <div class="nav-cta">
@@ -104,7 +104,7 @@ st.markdown(
 
       <main class="hero">
         <div class="hero-inner">
-          <div class="hero-chip">âœ§ AI-Powered</div>
+          <div class="hero-chip">&#10023; AI-Powered</div>
           <h1>Your exposure is only as good<br>as your data</h1>
           <p>
             ReMatch cleans and matches messy reinsurance bdx data using AI techniques and six intelligent
@@ -124,4 +124,3 @@ st.markdown(
 
 if _open_demo_dialog:
     _show_demo_dialog()
-
