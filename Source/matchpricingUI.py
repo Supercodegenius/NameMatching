@@ -571,3 +571,12 @@ def _pricing_login_dialog() -> None:
 if st.session_state.get("pricing_show_login_dialog") or bool(pricing_flow):
     st.session_state["pricing_show_login_dialog"] = True
     _pricing_login_dialog()
+
+left_spacer, button_col, right_spacer = st.columns([4, 2, 4])
+with button_col:
+    if st.button("Back to Landing", type="primary", use_container_width=True, key="pricing_back_to_landing"):
+        st.query_params["page"] = "landing"
+        if "pricing_flow" in st.query_params:
+            del st.query_params["pricing_flow"]
+        st.session_state["pricing_show_login_dialog"] = False
+        st.rerun()
