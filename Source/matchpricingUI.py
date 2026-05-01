@@ -427,7 +427,7 @@ st.markdown(
                         color: #ffffff !important;
                         font-family: "Plus Jakarta Sans", sans-serif;
                         font-size: 0.96rem;
-                        font-weight: 700;
+                        font-weight: 500;
                         padding: 0.82rem 1.15rem;
                         box-shadow: 0 8px 16px rgba(15, 98, 255, 0.22);
                     }
@@ -453,7 +453,7 @@ st.markdown(
                         color: #ffffff !important;
                         font-family: "Plus Jakarta Sans", sans-serif;
                         font-size: 0.96rem;
-                        font-weight: 700;
+                        font-weight: 400;
                         padding: 0.82rem 1.15rem;
                         box-shadow: 0 8px 16px rgba(15, 98, 255, 0.22);
                     }
@@ -475,7 +475,7 @@ st.markdown(
                     </div>
                     <div class="pricing-back-row">
                         <div></div>
-                        <a class="pricing-back-btn" href="?page=landing" target="_self">Back To Landing</a>
+                        <a class="pricing-back-btn" href="?page=landing" target="_self">Back to Landing</a>
                         <div></div>
                     </div>
                 </section>
