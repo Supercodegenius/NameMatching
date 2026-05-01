@@ -490,7 +490,7 @@ if pricing_flow:
     st.query_params["page"] = "rematchpricing"
 
 
-@st.dialog("Pricing setup", width="large")
+@st.dialog("Pricing setup", width="small")
 def _pricing_login_dialog() -> None:
     st.markdown("#### Log in (or create an account)")
     email = st.text_input("Email", value=st.session_state.get("pricing_user_email", "")).strip().lower()
