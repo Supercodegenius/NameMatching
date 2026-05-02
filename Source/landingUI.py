@@ -59,7 +59,7 @@ def _demo_dialog_body() -> None:
     st.markdown(
         """
 In order to book a demo of the tool or for download options of your matched data, please get in touch with the BrainCal Tech on
-`braincaldemos@gmail.com` or `surabhi.singh@braincal.com`.
+`braincaldemo@gmail.com` or `surabhi.singh@braincal.com`.
 
 Thanks for your interest!!
 """.strip()
