@@ -770,6 +770,50 @@ if sidebar_menu == "SLM":
     st.stop()
 
 if sidebar_menu == "Bulk Name Matching":
+    with st.sidebar:
+        st.divider()
+        st.header("Matching Settings")
+        st.caption("Configure matching and provide data.")
+
+        slm_health = _slm_health_status()
+        slm_available, slm_unavailable_reason = _slm_matching_available()
+
+        with st.expander("Matching settings", expanded=True):
+            _bulk_method_opts = [
+                "ENCCLT Match",
+                "FNCCLT Match",
+                "SNCCLT Match",
+                "JNCCLT Match",
+                "LNCCLT Match",
+                "AINCCLT Match",
+            ]
+            if slm_available:
+                _bulk_method_opts.append("SLM Match")
+
+            _bulk_method_sel = st.selectbox(
+                "Method",
+                _bulk_method_opts,
+                index=1,
+                key="bulk_method",
+            )
+            if not slm_available and slm_unavailable_reason:
+                st.caption(slm_unavailable_reason)
+
+            if _bulk_method_sel in {"FNCCLT Match", "JNCCLT Match", "AINCCLT Match", "SLM Match"}:
+                st.slider("Fuzzy threshold", 0, 100, 75, 1, key="bulk_threshold")
+            if _bulk_method_sel == "LNCCLT Match":
+                st.slider("Levenshtein max distance", 0, 10, 2, 1, key="bulk_lev_distance")
+                st.selectbox(
+                    "Levenshtein engine",
+                    ["Auto", "RapidFuzz", "Python"],
+                    key="bulk_lev_engine",
+                    help="Auto uses RapidFuzz when available, otherwise Python fallback.",
+                )
+
+        with st.expander("Advanced", expanded=False):
+            st.caption(f"Loaded: `{_clean_display_path(__file__)}`")
+            st.caption(f"mtime: `{_file_mtime_iso(__file__)}`")
+
     runpy.run_path(os.path.join(BASE_DIR, "bulknamematchingUI.py"), run_name="__main__")
     st.stop()
 
@@ -1251,9 +1295,11 @@ st.markdown(
 
 up_col1, up_col2 = st.columns(2, gap="large")
 with up_col1:
-    left_file = st.file_uploader("\u00a0Source File", type=["csv", "xlsx"])
+    st.markdown("<strong><b>Source File</b></strong>", unsafe_allow_html=True)
+    left_file = st.file_uploader("", type=["csv", "xlsx"], key="source_file")
 with up_col2:
-    right_file = st.file_uploader("**Reference File**", type=["csv", "xlsx"])
+    st.markdown("<strong>Reference File</strong>", unsafe_allow_html=True)
+    right_file = st.file_uploader("", type=["csv", "xlsx"], key="reference_file")
 
 if use_demo_files:
     left_df = (
@@ -1786,7 +1832,7 @@ st.link_button(
 # Self-learning feedback section
 # ---------------------------------------------------------------------------
 st.markdown("---")
-with st.expander("Confirm Matches \u2014 Self-Learning Feedback", expanded=False):
+with st.expander("Confirm Matches — Self-Learning Feedback", expanded=False):
     st.caption(
         "Mark each result as correct or incorrect. "
         "Saved decisions are applied automatically on every future run."
@@ -1798,7 +1844,7 @@ with st.expander("Confirm Matches \u2014 Self-Learning Feedback", expanded=False
         "matched_name": st.column_config.TextColumn("Matched Name", disabled=True),
         "score": st.column_config.NumberColumn("Score", disabled=True),
         "is_match": st.column_config.CheckboxColumn("Auto Match", disabled=True),
-        "is_correct": st.column_config.CheckboxColumn("\u2713 Correct?", help="Check to confirm this match, uncheck to reject it"),
+        "is_correct": st.column_config.CheckboxColumn("✓ Correct?", help="Check to confirm this match, uncheck to reject it"),
     }
     _edited_fb = st.data_editor(
         _fb_view,
