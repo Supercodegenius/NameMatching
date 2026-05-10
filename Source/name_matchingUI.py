@@ -1334,6 +1334,10 @@ else:
     left_df = read_table(left_file)
     right_df = read_table(right_file)
 
+reference_data_path: str | None = DEMO_TARGET_PATH if use_demo_files else None
+if not use_demo_files and right_file is not None and right_file.name:
+    reference_data_path = right_file.name if os.path.isabs(right_file.name) else None
+
 if left_df is None or right_df is None:
     st.info("Upload both files to start matching, or enable demo files in the sidebar.")
     st.stop()
@@ -1890,13 +1894,10 @@ def _top_country_candidates(
 def _row_enrich_dialog(
     source_name: str,
     source_country_value: str,
+    source_record: dict[str, object],
     name_candidates: list[str],
     country_candidates: list[str],
-    country_col_label: str,
-    right_df_cols: list[str],
-    use_demo_files: bool,
-    right_name_col: str,
-    country_col: str | None,
+    reference_data_path: str | None,
     row_original_index: int,
 ) -> None:
     """Modal dialog: RLHF trains the SLM; Enrichment adds to the reference file."""
@@ -1915,7 +1916,7 @@ def _row_enrich_dialog(
         )
     with country_col_ui:
         chosen_country = st.selectbox(
-            f"Top 10 {country_col_label} candidates",
+            "Top 10 location candidates",
             options=[""] + [c for c in country_candidates if c][:10],
             key="erd_country",
         )
@@ -1953,25 +1954,25 @@ def _row_enrich_dialog(
             if not _effective_name:
                 st.warning("Could not enrich because source name is blank.")
             else:
-                _new_ref_row: dict[str, object] = {col: "" for col in right_df_cols}
-                _new_ref_row[right_name_col] = _effective_name
-                if country_col and country_col in _new_ref_row:
-                    _new_ref_row[country_col] = _effective_country
-                _enr_list = list(st.session_state.get("_enrichment_rows", []))
-                _enr_list.append(_new_ref_row)
-                st.session_state["_enrichment_rows"] = _enr_list
-                if use_demo_files:
-                    try:
-                        _demo_ref = pd.read_csv(DEMO_TARGET_PATH)
-                        _demo_ref = pd.concat(
-                            [_demo_ref, pd.DataFrame([_new_ref_row])], ignore_index=True
-                        )
-                        _demo_ref.to_csv(DEMO_TARGET_PATH, index=False)
-                        st.success(f"Reference file updated with '{_effective_name}'.")
-                    except Exception as _exc_enr:
-                        st.error(f"Could not write reference file: {_exc_enr}")
-                else:
-                    st.success(f"'{_effective_name}' queued — download the enriched rows below the feedback panel.")
+                _new_ref_row: dict[str, object] = dict(source_record or {})
+                _new_ref_row["SAVED_Name"] = _effective_name
+                _new_ref_row["CONFIRMED_COUNTRY"] = _effective_country
+
+                try:
+                    _reference_dir = os.path.dirname(reference_data_path) if reference_data_path else os.getcwd()
+                    _enriched_path = os.path.join(_reference_dir, "Enricheddata.csv")
+                    _new_row_df = pd.DataFrame([_new_ref_row])
+
+                    if os.path.exists(_enriched_path):
+                        _existing_df = pd.read_csv(_enriched_path)
+                        _out_df = pd.concat([_existing_df, _new_row_df], ignore_index=True, sort=False)
+                    else:
+                        _out_df = _new_row_df
+
+                    _out_df.to_csv(_enriched_path, index=False)
+                    st.success(f"Enrichment saved to `{_enriched_path}`")
+                except Exception as _exc_enr:
+                    st.error(f"Could not write Enricheddata file: {_exc_enr}")
                 st.rerun()
 
 
@@ -2064,13 +2065,14 @@ with st.expander("Confirm Matches — Self-Learning Feedback", expanded=False):
             _row_enrich_dialog(
                 source_name=_sel_source_name,
                 source_country_value=_sel_source_country,
+                source_record=(
+                    left_df.loc[_sel_orig_idx].to_dict()
+                    if _sel_orig_idx in left_df.index
+                    else {"source_name": _sel_source_name}
+                ),
                 name_candidates=_name_cands,
                 country_candidates=_country_cands,
-                country_col_label=_country_col or "Country",
-                right_df_cols=right_df.columns.tolist(),
-                use_demo_files=use_demo_files,
-                right_name_col=right_name_col,
-                country_col=_country_col,
+                reference_data_path=reference_data_path,
                 row_original_index=_sel_orig_idx,
             )
         st.divider()
