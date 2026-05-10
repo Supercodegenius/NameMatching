@@ -869,9 +869,9 @@ with st.sidebar:
         lev_max_distance = 2
         lev_engine = "auto"
         if method in {"FNCCLT Match", "JNCCLT Match", "AINCCLT Match", "SLM Match", "Vector Similarity (SLM)", "SLM Adaptive Match"}:
-            threshold = st.slider(f"{method} + threshold", 0, 100, 75, 1)
+            threshold = st.slider(f"{method} threshold", 0, 100, 75, 1)
         if method == "LNCCLT Match":
-            lev_max_distance = st.slider("Levenshtein max distance", 0, 10, 2, 1)
+            lev_max_distance = st.slider("LNCCLT max distance", 0, 10, 2, 1)
             lev_engine = st.selectbox(
                 "Levenshtein engine",
                 ["Auto", "RapidFuzz", "Python"],
