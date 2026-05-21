@@ -578,30 +578,252 @@ def _slm_matching_available() -> tuple[bool, str | None]:
     return bool(health.get("ready", False)), health.get("reason")
 
 
-def _get_openai_client():
-    api_key = None
+def _parse_ctx_value(app_context: str, key: str) -> str:
+    """Extract a value from the app_context string by key label."""
+    for line in app_context.splitlines():
+        if line.strip().lower().startswith(key.lower()):
+            parts = line.split(":", 1)
+            if len(parts) == 2:
+                return parts[1].strip()
+    return ""
+
+
+def _extract_name_pair(question: str) -> tuple[str, str] | None:
+    """
+    Try to extract two quoted names from the question, e.g.:
+      'why does "AXA XL" match "AXA XL Re"?'
+      "explain 'British Airways' vs 'BA'"
+    Returns (name_a, name_b) or None if not found.
+    """
+    import re as _re
+    patterns = [
+        r'["\u2018\u2019\u201c\u201d]([^"\']+)["\u2018\u2019\u201c\u201d]\s*(?:vs?\.?|and|versus|match|compare)?\s*["\u2018\u2019\u201c\u201d]([^"\']+)["\u2018\u2019\u201c\u201d]',
+        r"'([^']+)'\s*(?:vs?\.?|and|versus|match|compare)?\s*'([^']+)'",
+    ]
+    for pat in patterns:
+        m = _re.search(pat, question, _re.IGNORECASE)
+        if m:
+            return m.group(1).strip(), m.group(2).strip()
+    return None
+
+
+def _slm_trace_explanation(name_a: str, name_b: str, threshold_str: str) -> str:
+    """Run score_pair_with_trace on the SLM and return a human-readable explanation."""
     try:
-        api_key = st.secrets.get("OPENAI_API_KEY")
-    except Exception:
-        api_key = None
-
-    api_key = api_key or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return None
+        from Source.slm_ui import load_model, score_pair_with_trace
+    except ImportError:
+        try:
+            from slm_ui import load_model, score_pair_with_trace
+        except ImportError:
+            return (
+                f"Could not load the SLM model to score **{name_a}** vs **{name_b}**. "
+                "Ensure the model files are present in `outputs/biencoder/`."
+            )
 
     try:
-        from openai import OpenAI
+        threshold = float(threshold_str) if threshold_str else 0.75
+        if threshold > 1.0:
+            threshold = threshold / 100.0
+    except ValueError:
+        threshold = 0.75
 
-        return OpenAI(api_key=api_key)
-    except Exception:
-        return None
+    try:
+        tokenizer, encoder, device, _ = load_model()
+        trace = score_pair_with_trace(
+            name_a, name_b, tokenizer, encoder, device,
+            normalize=True, threshold=threshold
+        )
+    except Exception as exc:
+        return f"SLM scoring failed for **{name_a}** vs **{name_b}**: `{type(exc).__name__}: {exc}`"
+
+    score = float(trace["score"])
+    prediction = trace["prediction"]
+    norm_a = trace["normalized_a"]
+    norm_b = trace["normalized_b"]
+    lm = trace["debug"]["lexical_metrics"]
+    guard = trace["debug"]["lexical_guard_triggered"]
+    seq_ratio = float(lm["sequence_ratio"])
+    tok_overlap = int(lm["token_overlap_count"])
+    tok_ratio = float(lm["token_overlap_ratio"])
+
+    verdict = "✅ **MATCH**" if prediction == "MATCH" else "❌ **NO MATCH**"
+
+    lines = [
+        f"### SLM Analysis: `{name_a}` vs `{name_b}`",
+        "",
+        f"**Verdict**: {verdict}  |  **Score**: `{score:.4f}`  |  **Threshold**: `{threshold:.2f}`",
+        "",
+        "#### Normalisation",
+        f"- Input A → `{norm_a}`",
+        f"- Input B → `{norm_b}`",
+        "",
+        "#### Lexical Guard Metrics",
+        f"- Sequence similarity: `{seq_ratio:.3f}` {'⚠️ low' if seq_ratio < 0.45 else '✔'}",
+        f"- Shared token count: `{tok_overlap}`",
+        f"- Token overlap ratio: `{tok_ratio:.3f}`",
+    ]
+
+    if guard:
+        lines += [
+            "",
+            "#### Why no match?",
+            "The **lexical guard** blocked this pair. The names share no common tokens and have "
+            f"very low character-level similarity (`{seq_ratio:.3f}`), so the SLM's high embedding "
+            "score was overridden to prevent a false positive.",
+        ]
+    elif prediction == "NO MATCH":
+        lines += [
+            "",
+            "#### Why no match?",
+            f"The cosine similarity `{score:.4f}` is below the threshold `{threshold:.2f}`. "
+            "The names are semantically different in the embedding space.",
+        ]
+    else:
+        lines += [
+            "",
+            "#### Why matched?",
+            f"Cosine similarity `{score:.4f}` ≥ threshold `{threshold:.2f}` and the lexical guard "
+            f"passed (sequence ratio `{seq_ratio:.3f}`, token overlap `{tok_overlap}`). "
+            "The SLM considers these names semantically equivalent.",
+        ]
+
+    return "\n".join(lines)
 
 
-def _chat_system_prompt() -> str:
+def _generate_slm_explanation(user_question: str, app_context: str = "") -> str:
+    """
+    Generate a specific, data-driven explanation using the SLM model.
+    All processing is local — no external API calls.
+    """
+    question_lower = user_question.lower()
+
+    # --- Specific pair scoring: detect quoted name pairs in the question ---
+    pair = _extract_name_pair(user_question)
+    if pair:
+        threshold_str = _parse_ctx_value(app_context, "Fuzzy threshold")
+        return _slm_trace_explanation(pair[0], pair[1], threshold_str)
+
+    # --- Questions about the current results ---
+    result_df: pd.DataFrame | None = st.session_state.get("result_df")
+    current_method = _parse_ctx_value(app_context, "Selected method")
+    current_threshold = _parse_ctx_value(app_context, "Fuzzy threshold")
+    rows_in_result = _parse_ctx_value(app_context, "Rows in result")
+
+    if "how many" in question_lower or "count" in question_lower or "summary" in question_lower:
+        if result_df is not None and not result_df.empty:
+            total = len(result_df)
+            matched = int(result_df["is_match"].sum()) if "is_match" in result_df.columns else "N/A"
+            unmatched = total - matched if matched != "N/A" else "N/A"
+            match_rate = f"{matched / total * 100:.1f}%" if matched != "N/A" and total > 0 else "N/A"
+            return (
+                f"### Current Result Summary\n\n"
+                f"| Metric | Value |\n|---|---|\n"
+                f"| Total rows | `{total}` |\n"
+                f"| Matched | `{matched}` |\n"
+                f"| Unmatched | `{unmatched}` |\n"
+                f"| Match rate | `{match_rate}` |\n"
+                f"| Method used | `{current_method}` |\n"
+                f"| Threshold | `{current_threshold}` |"
+            )
+        return "No match results are available yet. Run matching first, then ask for a summary."
+
+    if "unmatched" in question_lower or "failed" in question_lower or "did not match" in question_lower:
+        if result_df is not None and "is_match" in result_df.columns:
+            unmatched_df = result_df[~result_df["is_match"]]
+            count = len(unmatched_df)
+            if count == 0:
+                return f"All `{len(result_df)}` rows matched successfully with method **{current_method}** at threshold `{current_threshold}`."
+            src_col = next((c for c in result_df.columns if "source" in c.lower() or c.lower() in ("name_a", "name a")), None)
+            if src_col:
+                samples = unmatched_df[src_col].dropna().head(10).tolist()
+                sample_list = "\n".join(f"- `{n}`" for n in samples)
+                return (
+                    f"**{count}** rows did not match (out of `{len(result_df)}` total) "
+                    f"using **{current_method}** at threshold `{current_threshold}`.\n\n"
+                    f"**Sample unmatched source names:**\n{sample_list}\n\n"
+                    f"To investigate a specific pair, ask: *why does \"NameA\" not match \"NameB\"?*"
+                )
+            return (
+                f"**{count}** rows did not match out of `{len(result_df)}` total. "
+                f"Method: **{current_method}**, threshold: `{current_threshold}`."
+            )
+        return "No result data available. Run matching first."
+
+    if "best method" in question_lower or "which method" in question_lower:
+        ctx = f" (you are currently using **{current_method}**)" if current_method else ""
+        return (
+            f"**Recommended methods by use case{ctx}:**\n\n"
+            "| Use Case | Recommended Method |\n|---|---|\n"
+            "| Exact name matching | `Exact` |\n"
+            "| Slight typos / abbreviations | `SLM` or `Fuzzy` |\n"
+            "| Phonetic variants | `Soundex` |\n"
+            "| Highest semantic accuracy | `SLM` or `Vector Similarity` |\n\n"
+            "The **SLM** method uses your locally trained transformer — best for messy, real-world data."
+            + (f"\n\n**App context:**\n{app_context}" if app_context else "")
+        )
+
+    if "threshold" in question_lower or "tune" in question_lower or "false positive" in question_lower or "false negative" in question_lower:
+        ctx_threshold = f"Your current threshold is `{current_threshold}`." if current_threshold else ""
+        score_dist = ""
+        if result_df is not None and "score" in result_df.columns:
+            scores = result_df["score"].dropna()
+            if not scores.empty:
+                score_dist = (
+                    f"\n\n**Score distribution in current results** (`{len(scores)}` rows):\n"
+                    f"- Min: `{scores.min():.4f}` | Max: `{scores.max():.4f}` | Mean: `{scores.mean():.4f}` | Median: `{scores.median():.4f}`"
+                )
+        return (
+            f"**Threshold tuning guide:**\n\n"
+            f"{ctx_threshold}\n\n"
+            "| Threshold range | Effect |\n|---|---|\n"
+            "| `0.85 – 1.00` | Very strict — only near-identical names match |\n"
+            "| `0.70 – 0.84` | Balanced — catches common variations |\n"
+            "| `0.55 – 0.69` | Lenient — higher recall, more false positives |\n\n"
+            "Ask: *\"why does \\\"Name A\\\" match \\\"Name B\\\"?\"* to score a specific pair live."
+            + score_dist
+        )
+
+    if "explain" in question_lower or "how does" in question_lower or "how it works" in question_lower:
+        return (
+            "### How the SLM Matcher Works\n\n"
+            "1. **Normalisation** — Legal suffixes, punctuation, and accents are stripped.\n"
+            "2. **Tokenisation** — Each normalised name is split into subword tokens (max 64).\n"
+            "3. **Embedding** — Your fine-tuned transformer encodes tokens into a dense vector.\n"
+            "4. **Mean Pooling** — Token vectors are averaged to produce a sentence vector.\n"
+            "5. **Cosine Similarity** — Dot product of unit-normalised vectors → score in `[-1, 1]`.\n"
+            "6. **Lexical Guard** — Seq ratio < 0.45 AND zero shared tokens → forced NO MATCH.\n"
+            "7. **Threshold Decision** — Score ≥ threshold → **MATCH**, else **NO MATCH**.\n\n"
+            "Ask: *why does \"Name A\" match \"Name B\"?* to score a pair live."
+            + (f"\n\n**Current config:** {app_context}" if app_context else "")
+        )
+
+    if "troubleshoot" in question_lower or "not match" in question_lower or "mismatch" in question_lower or "miss" in question_lower:
+        ctx_threshold = f"current threshold `{current_threshold}`" if current_threshold else "your threshold"
+        return (
+            f"**Troubleshooting mismatches** (method: **{current_method or 'unknown'}**, {ctx_threshold}):\n\n"
+            "1. **Score too low** — Lower the threshold. Ask the assistant to score a specific pair.\n"
+            "2. **Lexical guard triggered** — Names share zero words and differ greatly in characters.\n"
+            "3. **Normalisation mismatch** — Unusual suffixes or special characters may not normalise.\n"
+            "4. **Wrong method** — Phonetic variants need `Soundex`; structural variations need `SLM`.\n\n"
+            "**Quick debug:** Ask *\"why does \\\"Name A\\\" not match \\\"Name B\\\"?\"*"
+            + (f"\n\n**Rows in current result:** {rows_in_result}" if rows_in_result else "")
+        )
+
+    # Fallback: contextual
+    loaded_info = ""
+    if result_df is not None:
+        total = len(result_df)
+        matched = int(result_df["is_match"].sum()) if "is_match" in result_df.columns else "?"
+        loaded_info = f"\n\nYou have **{total}** rows loaded with **{matched}** matches using **{current_method}** at threshold `{current_threshold}`."
     return (
-        "You are a helpful assistant embedded in a Streamlit name matching app. "
-        "Give concise and practical guidance about matching methods, thresholds, score interpretation, "
-        "and troubleshooting. Do not request or reveal API keys."
+        "I can answer specific questions about your name matching results.\n\n"
+        "**Try asking:**\n"
+        "- *Why does \"British Airways\" match \"BA\"?*  ← scores the pair live with the SLM\n"
+        "- *How many rows did not match?*\n"
+        "- *How do I tune the threshold?*\n"
+        "- *Explain how the SLM matcher works*\n"
+        "- *Troubleshoot my mismatches*"
+        + loaded_info
     )
 
 
@@ -925,7 +1147,7 @@ if sidebar_menu == "Bulk Name Matching":
                 st.caption(slm_unavailable_reason)
 
             if _bulk_method_sel in {"FNCCLT Match", "JNCCLT Match", "AINCCLT Match", "SLM Match", "Vector Similarity (SLM)", "SLM Adaptive Match"}:
-                st.slider(f"{_bulk_method_sel} + threshold", 0, 100, 75, 1, key="bulk_threshold")
+                st.slider("Fuzzy threshold", 0, 100, 75, 1, key="bulk_threshold")
             if _bulk_method_sel == "LNCCLT Match":
                 st.slider("Levenshtein max distance", 0, 10, 2, 1, key="bulk_lev_distance")
                 st.selectbox(
@@ -975,9 +1197,9 @@ with st.sidebar:
         lev_max_distance = 2
         lev_engine = "auto"
         if method in {"FNCCLT Match", "JNCCLT Match", "AINCCLT Match", "SLM Match", "Vector Similarity (SLM)", "SLM Adaptive Match"}:
-            threshold = st.slider(f"{method} threshold", 0, 100, 75, 1)
+            threshold = st.slider("Fuzzy threshold", 0, 100, 75, 1)
         if method == "LNCCLT Match":
-            lev_max_distance = st.slider("LNCCLT max distance", 0, 10, 2, 1)
+            lev_max_distance = st.slider("Levenshtein max distance", 0, 10, 2, 1)
             lev_engine = st.selectbox(
                 "Levenshtein engine",
                 ["Auto", "RapidFuzz", "Python"],
@@ -1440,10 +1662,6 @@ else:
     left_df = read_table(left_file)
     right_df = read_table(right_file)
 
-reference_data_path: str | None = DEMO_TARGET_PATH if use_demo_files else None
-if not use_demo_files and right_file is not None and right_file.name:
-    reference_data_path = right_file.name if os.path.isabs(right_file.name) else None
-
 if left_df is None or right_df is None:
     st.info("Upload both files to start matching, or enable demo files in the sidebar.")
     st.stop()
@@ -1882,10 +2100,13 @@ def _top_country_candidates(
 def _row_enrich_dialog(
     source_name: str,
     source_country_value: str,
-    source_record: dict[str, object],
     name_candidates: list[str],
     country_candidates: list[str],
-    reference_data_path: str | None,
+    country_col_label: str,
+    right_df_cols: list[str],
+    use_demo_files: bool,
+    right_name_col: str,
+    country_col: str | None,
     row_original_index: int,
 ) -> None:
     """Modal dialog: RLHF trains the SLM; Enrichment adds to the reference file."""
@@ -1904,7 +2125,7 @@ def _row_enrich_dialog(
         )
     with country_col_ui:
         chosen_country = st.selectbox(
-            "Top 10 location candidates",
+            f"Top 10 {country_col_label} candidates",
             options=[""] + [c for c in country_candidates if c][:10],
             key="erd_country",
         )
@@ -1942,25 +2163,25 @@ def _row_enrich_dialog(
             if not _effective_name:
                 st.warning("Could not enrich because source name is blank.")
             else:
-                _new_ref_row: dict[str, object] = dict(source_record or {})
-                _new_ref_row["SAVED_Name"] = _effective_name
-                _new_ref_row["CONFIRMED_COUNTRY"] = _effective_country
-
-                try:
-                    _reference_dir = os.path.dirname(reference_data_path) if reference_data_path else os.getcwd()
-                    _enriched_path = os.path.join(_reference_dir, "Enricheddata.csv")
-                    _new_row_df = pd.DataFrame([_new_ref_row])
-
-                    if os.path.exists(_enriched_path):
-                        _existing_df = pd.read_csv(_enriched_path)
-                        _out_df = pd.concat([_existing_df, _new_row_df], ignore_index=True, sort=False)
-                    else:
-                        _out_df = _new_row_df
-
-                    _out_df.to_csv(_enriched_path, index=False)
-                    st.success(f"Enrichment saved to `{_enriched_path}`")
-                except Exception as _exc_enr:
-                    st.error(f"Could not write Enricheddata file: {_exc_enr}")
+                _new_ref_row: dict[str, object] = {col: "" for col in right_df_cols}
+                _new_ref_row[right_name_col] = _effective_name
+                if country_col and country_col in _new_ref_row:
+                    _new_ref_row[country_col] = _effective_country
+                _enr_list = list(st.session_state.get("_enrichment_rows", []))
+                _enr_list.append(_new_ref_row)
+                st.session_state["_enrichment_rows"] = _enr_list
+                if use_demo_files:
+                    try:
+                        _demo_ref = pd.read_csv(DEMO_TARGET_PATH)
+                        _demo_ref = pd.concat(
+                            [_demo_ref, pd.DataFrame([_new_ref_row])], ignore_index=True
+                        )
+                        _demo_ref.to_csv(DEMO_TARGET_PATH, index=False)
+                        st.success(f"Reference file updated with '{_effective_name}'.")
+                    except Exception as _exc_enr:
+                        st.error(f"Could not write reference file: {_exc_enr}")
+                else:
+                    st.success(f"'{_effective_name}' queued — download the enriched rows below the feedback panel.")
                 st.rerun()
 
 
@@ -2053,14 +2274,13 @@ with st.expander("Confirm Matches — Self-Learning Feedback", expanded=False):
             _row_enrich_dialog(
                 source_name=_sel_source_name,
                 source_country_value=_sel_source_country,
-                source_record=(
-                    left_df.loc[_sel_orig_idx].to_dict()
-                    if _sel_orig_idx in left_df.index
-                    else {"source_name": _sel_source_name}
-                ),
                 name_candidates=_name_cands,
                 country_candidates=_country_cands,
-                reference_data_path=reference_data_path,
+                country_col_label=_country_col or "Country",
+                right_df_cols=right_df.columns.tolist(),
+                use_demo_files=use_demo_files,
+                right_name_col=right_name_col,
+                country_col=_country_col,
                 row_original_index=_sel_orig_idx,
             )
         st.divider()
@@ -2089,15 +2309,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<div class="nm-muted">Ask about matching methods, thresholds, or troubleshooting. (Set `OPENAI_API_KEY` to enable.)</div>',
+    '<div class="nm-muted">Ask about matching methods, thresholds, or troubleshooting. All analysis uses your local SLM model.</div>',
     unsafe_allow_html=True,
 )
 
 settings_col, clear_col = st.columns([4, 1], gap="small")
 with settings_col:
     with st.expander("Assistant settings", expanded=False):
-        chat_model = st.text_input("Model", value="gpt-4o-mini")
-        chat_temperature = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
         include_app_context = st.checkbox(
             "Include current app context",
             value=True,
@@ -2156,19 +2374,6 @@ if not user_prompt and "quick_prompt" in st.session_state:
 if user_prompt:
     st.session_state["chat_messages"].append({"role": "user", "content": user_prompt})
 
-    client = _get_openai_client()
-    if client is None:
-        st.session_state["chat_messages"].append(
-            {
-                "role": "assistant",
-                "content": (
-                    "I cannot call the AI model yet. Set `OPENAI_API_KEY` in your environment "
-                    "or `.streamlit/secrets.toml` and try again."
-                ),
-            }
-        )
-        st.rerun()
-
     context_lines: list[str] = []
     if include_app_context:
         context_lines = [
@@ -2184,28 +2389,17 @@ if user_prompt:
             f"Rows in result: {len(result_df)}",
         ]
 
-    user_content = user_prompt
-    if context_lines:
-        user_content = f"{user_prompt}\n\nApp context:\n" + "\n".join(context_lines)
+    app_context_str = "\n".join(context_lines) if context_lines else ""
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            try:
-                response = client.chat.completions.create(
-                    model=chat_model,
-                    messages=[
-                        {"role": "system", "content": _chat_system_prompt()},
-                        *st.session_state["chat_messages"][:-1],
-                        {"role": "user", "content": user_content},
-                    ],
-                    temperature=float(chat_temperature),
-                )
-                answer = response.choices[0].message.content or ""
-            except Exception as error:
-                answer = f"Sorry, I hit an error calling the model: `{type(error).__name__}`."
+        # Generate SLM-based explanation locally (no external API calls)
+        try:
+            answer = _generate_slm_explanation(user_prompt, app_context_str)
+        except Exception as error:
+            answer = f"An error occurred while generating the explanation: {type(error).__name__}"
 
-            st.markdown(answer)
-            st.session_state["chat_messages"].append({"role": "assistant", "content": answer})
+        st.markdown(answer)
+        st.session_state["chat_messages"].append({"role": "assistant", "content": answer})
 
 st.markdown("</div>", unsafe_allow_html=True)
 st.markdown(
