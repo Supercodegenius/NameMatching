@@ -255,8 +255,7 @@ html(
 
               @media (max-width: 680px) {
                 .hm-shell {
-                  padding-left: 0.8rem;
-                  padding-right: 0.8rem;
+                  padding: 0.7rem 0.8rem 0.9rem;
                 }
 
                 .hm-shell::before {
@@ -267,13 +266,46 @@ html(
                   opacity: 0.2;
                 }
 
+                .hm-head {
+                  margin-top: 0;
+                }
+
+                .hm-title {
+                  font-size: clamp(2rem, 8vw, 2.7rem);
+                }
+
                 .hm-subtitle {
+                  margin-top: 0.45rem;
                   max-width: 100%;
+                  font-size: 0.98rem;
+                  line-height: 1.2;
                 }
 
                 .hm-grid {
-                  margin-top: 1.6rem;
+                  margin-top: 1.1rem;
                   grid-template-columns: 1fr;
+                  gap: 0.95rem;
+                }
+
+                .hm-col {
+                  padding: 1rem 1rem 0.9rem;
+                  border-radius: 0.85rem;
+                }
+
+                .hm-icon {
+                  width: 2rem;
+                  height: 2rem;
+                  margin-bottom: 0.72rem;
+                }
+
+                .hm-card-title {
+                  font-size: 1.02rem;
+                }
+
+                .hm-card-text {
+                  margin-top: 0.45rem;
+                  font-size: 0.84rem;
+                  line-height: 1.22;
                 }
               }
             </style>
@@ -326,7 +358,7 @@ html(
         </html>
         """
     ),
-    height=500,
+    height=860,
     scrolling=False,
 )
 

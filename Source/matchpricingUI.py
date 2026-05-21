@@ -465,6 +465,9 @@ st.markdown(
                         .pricing-shell .pricing-cta-grid {
                             grid-template-columns: 1fr;
                         }
+                        .pricing-shell .pricing-back-row {
+                            grid-template-columns: 1fr;
+                        }
                     }
                 </style>
                 <section class="pricing-shell">
