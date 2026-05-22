@@ -294,6 +294,8 @@ st.markdown(
             background: rgba(255, 255, 255, 0.88);
             padding: 1.4rem 1.4rem 1.3rem;
             box-shadow: 0 14px 24px rgba(21, 34, 55, 0.12);
+                        display: flex;
+                        flex-direction: column;
           }
 
           .pricing-card h3 {
@@ -328,6 +330,10 @@ st.markdown(
             font-size: 0.98rem;
           }
 
+                    .pricing-card .pricing-cta-btn {
+                        margin-top: 1.1rem;
+                    }
+
           @media (max-width: 900px) {
             .pricing-grid {
               grid-template-columns: 1fr;
@@ -356,6 +362,7 @@ st.markdown(
 <li>0.5 GBP/search</li>
 <li>No integration required</li>
 </ul>
+<a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=payg" target="_self">Get Started</a>
 </article>
 
 <article class="pricing-card">
@@ -367,6 +374,7 @@ st.markdown(
 <li>Agreed credit</li>
 <li>20% upfront discount</li>
 </ul>
+<a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=subscription" target="_self">Get Started</a>
 </article>
 
 <article class="pricing-card">
@@ -377,6 +385,7 @@ st.markdown(
 <li>Role-based access control</li>
 <li>Audit logs</li>
 </ul>
+<a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=subscription" target="_self">Get Started</a>
 </article>
 </div>
 </section>
@@ -409,12 +418,6 @@ st.markdown(
         dedent(
                 """
                 <style>
-                    .pricing-shell .pricing-cta-grid {
-                        display: grid;
-                        grid-template-columns: repeat(3, minmax(0, 1fr));
-                        gap: 1.1rem;
-                        margin-top: 0.12rem;
-                    }
                     .pricing-shell .pricing-cta-btn {
                         display: block;
                         width: 100%;
@@ -462,20 +465,12 @@ st.markdown(
                         filter: brightness(1.02);
                     }
                     @media (max-width: 900px) {
-                        .pricing-shell .pricing-cta-grid {
-                            grid-template-columns: 1fr;
-                        }
                         .pricing-shell .pricing-back-row {
                             grid-template-columns: 1fr;
                         }
                     }
                 </style>
                 <section class="pricing-shell">
-                    <div class="pricing-cta-grid">
-                        <a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=payg" target="_self">Get Started</a>
-                        <a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=subscription" target="_self">Get Started</a>
-                        <a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=subscription" target="_self">Get Started</a>
-                    </div>
                     <div class="pricing-back-row">
                         <div></div>
                         <a class="pricing-back-btn" href="?page=landing" target="_self">Back to Landing</a>
