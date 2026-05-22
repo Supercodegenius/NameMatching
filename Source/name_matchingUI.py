@@ -1079,7 +1079,7 @@ with st.sidebar:
         "Name Matching": "🔎 Name Matching",
         "Bulk Name Matching": "📦 Bulk Name Matching",
         "AirlineMatching": "✈️ Airline Matching",
-        "Tower Matching": "🗼 Provide Data for Tower Matching",
+        "Tower Matching": "🗼 Tower Matching",
         "Admin": "⚙️ Admin",
         "SLM": "🤖 SLM",
     }
