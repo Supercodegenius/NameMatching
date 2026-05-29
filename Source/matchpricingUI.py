@@ -328,10 +328,12 @@ st.markdown(
             color: #343741;
             line-height: 1.55;
             font-size: 0.98rem;
+                        flex: 1 1 auto;
           }
 
                     .pricing-card .pricing-cta-btn {
-                        margin-top: 1.1rem;
+                        margin-top: auto;
+                        padding-top: 1.1rem;
                     }
 
           @media (max-width: 900px) {
