@@ -422,7 +422,7 @@ html(
         </html>
         """
     ),
-      height=600,
+      height=420,
       scrolling=True,
 )
 
