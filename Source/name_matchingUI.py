@@ -19,7 +19,7 @@ import pandas as pd
 import streamlit as st
 from streamlit.components.v1 import html
 
-FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png.jpeg")
+FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png")
 
 
 def _safe_set_page_config(**kwargs) -> None:
@@ -56,7 +56,26 @@ st.markdown(
           radial-gradient(900px 420px at 100% 0%, #dde8fb 0%, transparent 55%),
           linear-gradient(180deg, #edf2f9 0%, var(--nm-page-bg) 55%);
       }
-      html, body { margin: 0; }
+            html, body {
+                margin: 0;
+                height: 100%;
+                overflow: hidden !important;
+            }
+
+            .stApp,
+            div[data-testid="stAppViewContainer"],
+            section.main,
+            div[data-testid="stAppViewContainer"] > .main {
+                height: 100%;
+                overflow: hidden !important;
+            }
+
+            section[data-testid="stMain"],
+            div[data-testid="stMain"] {
+                height: 100%;
+                overflow-y: auto !important;
+                overflow-x: hidden !important;
+            }
 
             /* Keep Streamlit header visible so the sidebar expand toggle is always available. */
       div[data-testid="stDecoration"],
@@ -73,8 +92,8 @@ st.markdown(
             /* Remove visible white header strip while keeping header controls available. */
             header[data-testid="stHeader"] {
                 background: transparent !important;
-                height: 0 !important;
                 border: 0 !important;
+                box-shadow: none !important;
             }
 
             /* Remove Deploy button from header area. */
@@ -403,6 +422,30 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+html(
+        """
+        <script>
+            (() => {
+                const doc = window.parent && window.parent.document ? window.parent.document : document;
+                const selectors = [
+                    'div[data-testid="collapsedControl"]',
+                    'button[data-testid="stExpandSidebarButton"]',
+                    'button[aria-label*="sidebar" i]',
+                    'button[title*="sidebar" i]'
+                ];
+                const nodes = doc.querySelectorAll(selectors.join(','));
+                nodes.forEach((node) => {
+                    node.style.display = 'flex';
+                    node.style.visibility = 'visible';
+                    node.style.opacity = '1';
+                    node.style.zIndex = '1001';
+                });
+            })();
+        </script>
+        """,
+        height=0,
+)
+
 st.markdown(
     """
     <div class="nm-hero">
@@ -576,6 +619,13 @@ def _slm_health_status() -> dict[str, object]:
 def _slm_matching_available() -> tuple[bool, str | None]:
     health = _slm_health_status()
     return bool(health.get("ready", False)), health.get("reason")
+
+
+def _method_threshold_label(method_label: str, metric: str) -> str:
+    method_prefix = (method_label or "").split()[0].strip()
+    if not method_prefix:
+        method_prefix = "Match"
+    return f"{method_prefix} {metric}"
 
 
 def _parse_ctx_value(app_context: str, key: str) -> str:
@@ -930,6 +980,329 @@ def _save_data_upload_to_db(
     return upload_id, len(row_payloads)
 
 
+def _validate_access_table_name(table_name: str) -> str:
+    safe_name = str(table_name or "").strip()
+    if not safe_name:
+        raise ValueError("Access table name cannot be empty.")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", safe_name):
+        raise ValueError(
+            "Access table name must start with a letter or underscore and contain only "
+            "letters, numbers, or underscores (max 64 characters)."
+        )
+    return safe_name
+
+
+def _resolve_access_db_path(access_db_path: str) -> str:
+    raw_path = str(access_db_path or "").strip()
+    if not raw_path:
+        raise ValueError("Access DB path or name is required.")
+
+    has_path_part = any(sep in raw_path for sep in ("\\", "/"))
+    has_known_ext = raw_path.lower().endswith((".accdb", ".mdb"))
+
+    candidate_names: list[str] = []
+    if has_known_ext:
+        candidate_names.append(raw_path)
+    else:
+        candidate_names.extend([f"{raw_path}.accdb", f"{raw_path}.mdb"])
+        if has_path_part:
+            candidate_names.append(raw_path)
+
+    roots = [
+        os.getcwd(),
+        BASE_DIR,
+        os.path.expanduser("~"),
+        os.path.join(os.path.expanduser("~"), "Documents"),
+        os.path.join(os.path.expanduser("~"), "OneDrive", "Documents"),
+        os.environ.get("USERPROFILE", ""),
+    ]
+
+    normalized_candidates: list[str] = []
+    for name in candidate_names:
+        expanded = os.path.expanduser(name)
+        if os.path.isabs(expanded) or any(sep in expanded for sep in ("\\", "/")):
+            normalized_candidates.append(os.path.abspath(expanded))
+            continue
+        for root in roots:
+            if not root:
+                continue
+            normalized_candidates.append(os.path.abspath(os.path.join(root, expanded)))
+
+    seen: set[str] = set()
+    deduped_candidates: list[str] = []
+    for candidate in normalized_candidates:
+        key = candidate.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped_candidates.append(candidate)
+
+    for candidate in deduped_candidates:
+        if os.path.exists(candidate) and candidate.lower().endswith((".accdb", ".mdb")):
+            return candidate
+
+    raise FileNotFoundError(
+        "Access DB file not found. Checked: " + ", ".join(deduped_candidates)
+    )
+
+
+def _get_access_connection(access_db_path: str):
+    try:
+        import importlib
+        pyodbc = importlib.import_module("pyodbc")
+    except Exception as exc:
+        raise ModuleNotFoundError(
+            "pyodbc is required for Access DB connectivity. Install it with `pip install pyodbc`."
+        ) from exc
+
+    db_path = _resolve_access_db_path(access_db_path)
+
+    all_drivers = pyodbc.drivers()
+    preferred_driver = next(
+        (drv for drv in all_drivers if drv.lower().startswith("microsoft access driver")),
+        None,
+    )
+    if preferred_driver is None:
+        access_drivers = [
+            drv for drv in all_drivers
+            if "access" in drv.lower() and "dbase" not in drv.lower() and "text" not in drv.lower()
+        ]
+        preferred_driver = access_drivers[0] if access_drivers else None
+
+    if preferred_driver is None:
+        raise RuntimeError(
+            "No Microsoft Access ODBC driver found. Install 'Microsoft Access Database Engine'."
+        )
+
+    conn_str = f"DRIVER={{{preferred_driver}}};DBQ={db_path};"
+    return pyodbc.connect(conn_str, autocommit=False)
+
+
+def _sanitize_access_column_name(column_name: str, used_names: set[str]) -> str:
+    base_name = re.sub(r"[^A-Za-z0-9_]", "_", str(column_name or "").strip())
+    base_name = base_name.strip("_") or "column"
+    if not re.match(r"[A-Za-z_]", base_name):
+        base_name = f"c_{base_name}"
+    base_name = base_name[:48]
+
+    candidate = base_name
+    suffix = 1
+    while candidate.lower() in used_names:
+        suffix += 1
+        suffix_str = f"_{suffix}"
+        candidate = f"{base_name[: max(1, 48 - len(suffix_str))]}{suffix_str}"
+
+    used_names.add(candidate.lower())
+    return candidate
+
+
+def _build_access_column_map(columns: list[str]) -> list[tuple[str, str]]:
+    used_names: set[str] = set()
+    return [
+        (str(original), _sanitize_access_column_name(str(original), used_names))
+        for original in columns
+    ]
+
+
+def _access_table_exists(conn, table_name: str) -> bool:
+    cursor = conn.cursor()
+    row = cursor.tables(table=table_name, tableType="TABLE").fetchone()
+    return row is not None
+
+
+def _get_access_table_columns(conn, table_name: str) -> list[str]:
+    cursor = conn.cursor()
+    cursor.execute(f"SELECT * FROM [{table_name}] WHERE 1=0")
+    if not cursor.description:
+        return []
+    return [str(col[0]) for col in cursor.description]
+
+
+def _ensure_access_data_upload_table(
+    conn,
+    table_name: str,
+    source_df: pd.DataFrame,
+) -> tuple[str, list[tuple[str, str]]]:
+    safe_table_name = _validate_access_table_name(table_name)
+    if source_df is None or source_df.empty:
+        raise ValueError("Upload a source file first so Access table columns match the upload structure.")
+
+    source_columns = [str(col) for col in source_df.columns.tolist()]
+    if not source_columns:
+        raise ValueError("Source upload has no columns to create in Access.")
+
+    column_map = _build_access_column_map(source_columns)
+    if _access_table_exists(conn, safe_table_name):
+        existing_columns = {name.lower() for name in _get_access_table_columns(conn, safe_table_name)}
+        expected_columns = {safe_name.lower() for _, safe_name in column_map}
+        if existing_columns != expected_columns:
+            raise ValueError(
+                "Existing Access table schema does not match upload columns. "
+                "Use a new table name or align the schema."
+            )
+        return safe_table_name, column_map
+
+    cursor = conn.cursor()
+    column_defs = ",\n                    ".join(
+        f"[{safe_name}] LONGTEXT"
+        for _, safe_name in column_map
+    )
+    cursor.execute(
+        f"""
+        CREATE TABLE [{safe_table_name}] (
+            {column_defs}
+        )
+        """
+    )
+    conn.commit()
+    return safe_table_name, column_map
+
+
+def _init_access_data_upload_table(
+    access_db_path: str,
+    table_name: str,
+    source_df: pd.DataFrame,
+) -> tuple[str, list[tuple[str, str]]]:
+    with _get_access_connection(access_db_path) as conn:
+        return _ensure_access_data_upload_table(
+            conn=conn,
+            table_name=table_name,
+            source_df=source_df,
+        )
+
+
+def _build_access_insert_column_map(
+    conn,
+    table_name: str,
+    source_df: pd.DataFrame,
+    mapping_df: pd.DataFrame,
+) -> tuple[str, list[tuple[str, str]]]:
+    """Resolve source->Access columns for insert, using mapping UI when table already exists."""
+    safe_table_name = _validate_access_table_name(table_name)
+    if source_df is None or source_df.empty:
+        raise ValueError("Upload a source file first so Access insert columns can be resolved.")
+
+    if not _access_table_exists(conn, safe_table_name):
+        return _ensure_access_data_upload_table(
+            conn=conn,
+            table_name=safe_table_name,
+            source_df=source_df,
+        )
+
+    source_columns = [str(col) for col in source_df.columns.tolist()]
+    source_lookup = {col.lower(): col for col in source_columns}
+    existing_columns = _get_access_table_columns(conn, safe_table_name)
+    existing_lookup = {col.lower(): col for col in existing_columns}
+
+    column_map: list[tuple[str, str]] = []
+    used_destinations: set[str] = set()
+
+    if isinstance(mapping_df, pd.DataFrame) and {
+        "Source Column",
+        "Destination Column",
+    }.issubset(mapping_df.columns):
+        for _, row in mapping_df.iterrows():
+            src_raw = str(row.get("Source Column", "")).strip()
+            dst_raw = str(row.get("Destination Column", "")).strip()
+            if not src_raw or not dst_raw:
+                continue
+
+            src_col = source_lookup.get(src_raw.lower())
+            dst_col = existing_lookup.get(dst_raw.lower())
+            if src_col is None or dst_col is None:
+                continue
+            if dst_col.lower() in used_destinations:
+                continue
+
+            column_map.append((src_col, dst_col))
+            used_destinations.add(dst_col.lower())
+
+    if not column_map:
+        for src_col in source_columns:
+            dst_col = existing_lookup.get(src_col.lower())
+            if dst_col is None:
+                continue
+            if dst_col.lower() in used_destinations:
+                continue
+            column_map.append((src_col, dst_col))
+            used_destinations.add(dst_col.lower())
+
+    if not column_map:
+        raise ValueError(
+            "No valid source-to-destination column mapping found for Access upload. "
+            "Map source columns to existing Access columns before uploading."
+        )
+
+    return safe_table_name, column_map
+
+
+def _coerce_access_value(value: object) -> object:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _save_data_upload_to_access(
+    source_df: pd.DataFrame,
+    mapping_df: pd.DataFrame,
+    source_filename: str,
+    access_db_path: str,
+    table_name: str,
+) -> tuple[str, int, str]:
+    upload_id = pd.Timestamp.utcnow().strftime("upload_%Y%m%d%H%M%S%f")
+
+    safe_source_df = source_df.astype(object).where(pd.notna(source_df), None)
+    with _get_access_connection(access_db_path) as conn:
+        safe_table_name, column_map = _build_access_insert_column_map(
+            conn=conn,
+            table_name=table_name,
+            source_df=source_df,
+            mapping_df=mapping_df,
+        )
+        ordered_source_columns = [original for original, _ in column_map]
+        ordered_access_columns = [safe_name for _, safe_name in column_map]
+        placeholders = ", ".join(["?"] * len(ordered_access_columns))
+        insert_columns_sql = ", ".join(f"[{col}]" for col in ordered_access_columns)
+        insert_sql = (
+            f"INSERT INTO [{safe_table_name}] ({insert_columns_sql}) "
+            f"VALUES ({placeholders})"
+        )
+
+        row_values = [
+            tuple(_coerce_access_value(value) for value in row)
+            for row in safe_source_df[ordered_source_columns].itertuples(index=False, name=None)
+        ]
+
+        cursor = conn.cursor()
+        try:
+            cursor.fast_executemany = True
+        except Exception:
+            pass
+        if row_values:
+            last_error: Exception | None = None
+            try:
+                cursor.executemany(insert_sql, row_values)
+            except Exception as exc_bulk:
+                last_error = exc_bulk
+                try:
+                    batch_size = 2000
+                    for start in range(0, len(row_values), batch_size):
+                        cursor.executemany(insert_sql, row_values[start:start + batch_size])
+                except Exception as exc_chunk:
+                    last_error = exc_chunk
+                    try:
+                        for row in row_values:
+                            cursor.execute(insert_sql, row)
+                    except Exception as exc_row:
+                        raise RuntimeError(
+                            "Access insert failed in bulk, chunked, and row modes. "
+                            f"Last error: {exc_row}"
+                        ) from last_error
+            conn.commit()
+
+    return upload_id, int(len(source_df)), safe_table_name
+
+
 def _compose_match_values(
     df: pd.DataFrame,
     primary_col: str,
@@ -1147,9 +1520,9 @@ if sidebar_menu == "Bulk Name Matching":
                 st.caption(slm_unavailable_reason)
 
             if _bulk_method_sel in {"FNCCLT Match", "JNCCLT Match", "AINCCLT Match", "SLM Match", "Vector Similarity (SLM)", "SLM Adaptive Match"}:
-                st.slider("Fuzzy threshold", 0, 100, 75, 1, key="bulk_threshold")
+                st.slider(_method_threshold_label(_bulk_method_sel, "threshold"), 0, 100, 75, 1, key="bulk_threshold")
             if _bulk_method_sel == "LNCCLT Match":
-                st.slider("Levenshtein max distance", 0, 10, 2, 1, key="bulk_lev_distance")
+                st.slider(_method_threshold_label(_bulk_method_sel, "max distance"), 0, 10, 2, 1, key="bulk_lev_distance")
                 st.selectbox(
                     "Levenshtein engine",
                     ["Auto", "RapidFuzz", "Python"],
@@ -1197,9 +1570,9 @@ with st.sidebar:
         lev_max_distance = 2
         lev_engine = "auto"
         if method in {"FNCCLT Match", "JNCCLT Match", "AINCCLT Match", "SLM Match", "Vector Similarity (SLM)", "SLM Adaptive Match"}:
-            threshold = st.slider("Fuzzy threshold", 0, 100, 75, 1)
+            threshold = st.slider(_method_threshold_label(method, "threshold"), 0, 100, 75, 1)
         if method == "LNCCLT Match":
-            lev_max_distance = st.slider("Levenshtein max distance", 0, 10, 2, 1)
+            lev_max_distance = st.slider(_method_threshold_label(method, "max distance"), 0, 10, 2, 1)
             lev_engine = st.selectbox(
                 "Levenshtein engine",
                 ["Auto", "RapidFuzz", "Python"],
@@ -1271,17 +1644,76 @@ if method_key in {"slm", "vector_similarity", "slm_adaptive"} and not st.session
                 st.warning(f"SLM warm-up could not complete: {exc}")
 
 if sidebar_menu == "Data Upload":
-    st.subheader("Data Upload")
     source_upload_df = None
     mapping_df = pd.DataFrame(columns=["Source Column", "Destination Column"])
     preview_clicked = False
-    uploaded_source_file = st.file_uploader(
-        "Source file selector",
-        type=["csv", "xlsx"],
-        key="data_upload_source_file",
+    title_col, selector_label_col, selector_input_col = st.columns(
+        [2.0, 1.5, 5.5],
+        gap="small",
+        vertical_alignment="center",
     )
-    if uploaded_source_file is not None:
+    with title_col:
+        st.markdown("<h2 style='margin:0;'>Data Upload</h2>", unsafe_allow_html=True)
+    with selector_label_col:
+        st.markdown("<p style='margin:0; font-weight:700;'>Source file selector</p>", unsafe_allow_html=True)
+    with selector_input_col:
+        uploaded_source_file = st.file_uploader(
+            "Source file selector",
+            type=["csv", "xlsx"],
+            key="data_upload_source_file",
+            label_visibility="collapsed",
+        )
+
+    save_to_access = st.checkbox(
+        "Also save to Access DB",
+        value=False,
+        key="data_upload_save_to_access",
+        help="Optional. Keep this unchecked for a simple SQLite-only upload.",
+    )
+    access_db_path = ""
+    access_table_name = "reInsuredlines"
+    if save_to_access:
+        access_path_col, access_table_col = st.columns([3.2, 1.8], gap="small")
+        with access_path_col:
+            access_db_path = st.text_input(
+                "Access DB path (.accdb/.mdb)",
+                key="data_upload_access_db_path",
+                value="",
+                placeholder=r"C:\Data\ReMatchUpload.accdb",
+            )
+        with access_table_col:
+            access_table_name = st.text_input(
+                "Access table name",
+                key="data_upload_access_table_name",
+                value="reInsuredlines",
+            )
+
+    if uploaded_source_file is not None and source_upload_df is None:
         source_upload_df = read_table(uploaded_source_file)
+
+    if save_to_access and st.button(
+        "Create Access Upload Table",
+        use_container_width=False,
+        key="data_upload_create_access_table",
+    ):
+        if source_upload_df is None:
+            st.warning("Upload a source file first so Access table structure can match the upload columns.")
+        elif not str(access_db_path or "").strip():
+            st.warning("Provide an Access DB path before creating the table.")
+        else:
+            try:
+                created_table_name, _ = _init_access_data_upload_table(
+                    access_db_path=access_db_path,
+                    table_name=access_table_name,
+                    source_df=source_upload_df,
+                )
+                st.success(
+                    f"Access table `{created_table_name}` is ready in `{access_db_path}`."
+                )
+            except Exception as exc:
+                st.error(f"Could not create Access table: {exc}")
+
+    if uploaded_source_file is not None:
         if source_upload_df is None:
             st.warning("Could not read the selected file.")
         else:
@@ -1345,16 +1777,29 @@ if sidebar_menu == "Data Upload":
     else:
         st.info("Choose a CSV/XLSX file.")
 
-    upload_button_clicked = st.button(
-        "Data Upload",
-        type="primary",
-        use_container_width=True,
-        disabled=(
-            uploaded_source_file is None
-            or source_upload_df is None
-            or not _is_control_enabled("data_upload_button")
-        ),
-    )
+    action_back_col, action_upload_col = st.columns(2, gap="small")
+    with action_back_col:
+        back_to_landing = st.button(
+            "Back to Landing",
+            type="primary",
+            use_container_width=True,
+            key="data_upload_back",
+        )
+    with action_upload_col:
+        upload_button_clicked = st.button(
+            "Data Upload",
+            type="primary",
+            use_container_width=True,
+            disabled=(
+                uploaded_source_file is None
+                or source_upload_df is None
+            ),
+        )
+
+    if back_to_landing:
+        st.query_params["page"] = "landing"
+        st.rerun()
+
     if upload_button_clicked and uploaded_source_file is not None and source_upload_df is not None:
         with st.spinner("Saving uploaded data to DB..."):
             upload_id, saved_row_count = _save_data_upload_to_db(
@@ -1362,9 +1807,25 @@ if sidebar_menu == "Data Upload":
                 mapping_df,
                 uploaded_source_file.name,
             )
+            access_save_note = ""
+            if save_to_access and str(access_db_path or "").strip():
+                try:
+                    _, access_saved_rows, access_saved_table = _save_data_upload_to_access(
+                        source_upload_df,
+                        mapping_df,
+                        uploaded_source_file.name,
+                        access_db_path,
+                        access_table_name,
+                    )
+                    access_save_note = (
+                        " | Access saved rows: "
+                        f"{access_saved_rows} to table `{access_saved_table}`"
+                    )
+                except Exception as exc:
+                    st.warning(f"SQLite save succeeded, but Access save failed: {exc}")
         st.success(
             f"Data uploaded to DB successfully. Upload ID: `{upload_id}`. "
-            f"Saved rows: {saved_row_count}. DB: `{DATA_UPLOAD_DB_PATH}`"
+            f"Saved rows: {saved_row_count}. DB: `{DATA_UPLOAD_DB_PATH}`{access_save_note}"
         )
 
     st.markdown("Switch to **Name Matching** from the left menu to run matching.")

@@ -19,7 +19,7 @@ import pandas as pd
 import streamlit as st
 from streamlit.components.v1 import html
 
-FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png.jpeg")
+FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png")
 
 
 def _safe_set_page_config(**kwargs) -> None:

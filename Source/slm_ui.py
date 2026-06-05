@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
 
-FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png.jpeg")
+FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png")
 
 try:
     from Source.normalise import normalise_name

@@ -6,7 +6,7 @@ import streamlit as st
 
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 LOGO_PATH = os.path.join(ASSETS_DIR, "logo.png")
-FAVICON_PATH = os.path.join(ASSETS_DIR, "favicon.png.jpeg")
+FAVICON_PATH = os.path.join(ASSETS_DIR, "favicon.png")
 LANDING_CSS_PATH = os.path.join(ASSETS_DIR, "landing.css")
 
 
@@ -43,10 +43,66 @@ _safe_set_page_config(
 )
 
 logo_data_uri = _to_data_uri(LOGO_PATH)
+favicon_data_uri = _to_data_uri(FAVICON_PATH)
 landing_css = _load_css(LANDING_CSS_PATH)
 
+if favicon_data_uri:
+        st.markdown(
+                f"""
+                <script>
+                (function() {{
+                    const href = "{favicon_data_uri}";
+                    let icon = document.querySelector("link[rel='icon']")
+                        || document.querySelector("link[rel='shortcut icon']")
+                        || document.querySelector("link[rel*='icon']");
+                    if (!icon) {{
+                        icon = document.createElement("link");
+                        icon.setAttribute("rel", "icon");
+                        document.head.appendChild(icon);
+                    }}
+                    icon.setAttribute("type", "image/png");
+                    icon.setAttribute("href", href);
+                }})();
+                </script>
+                """,
+                unsafe_allow_html=True,
+        )
+
+st.markdown(
+        """
+        <script>
+        (function() {
+            function resetLandingScroll() {
+                const mainEl = document.querySelector("section[data-testid='stMain'], div[data-testid='stMain']");
+                if (mainEl) {
+                    mainEl.scrollTop = 0;
+                }
+                window.scrollTo(0, 0);
+            }
+            function normalizeLandingGap() {
+                const verticalBlock = document.querySelector("div[data-testid='stMainBlockContainer'] > div[data-testid='stVerticalBlock']");
+                if (!verticalBlock) return;
+                verticalBlock.style.setProperty("gap", "0px", "important");
+                verticalBlock.style.setProperty("row-gap", "0px", "important");
+                verticalBlock.style.setProperty("column-gap", "0px", "important");
+                verticalBlock.querySelectorAll(":scope > div[data-testid='stElementContainer']").forEach((el) => {
+                    el.style.setProperty("margin-top", "0px", "important");
+                    el.style.setProperty("margin-bottom", "0px", "important");
+                });
+            }
+            resetLandingScroll();
+            normalizeLandingGap();
+            setTimeout(() => { resetLandingScroll(); normalizeLandingGap(); }, 60);
+            setTimeout(() => { resetLandingScroll(); normalizeLandingGap(); }, 220);
+            setTimeout(() => { resetLandingScroll(); normalizeLandingGap(); }, 700);
+        })();
+        </script>
+        """,
+        unsafe_allow_html=True,
+)
+
 if landing_css:
-    st.markdown(f"<style>{landing_css}</style>", unsafe_allow_html=True)
+        st.markdown(f"<style>{landing_css}</style>", unsafe_allow_html=True)
 
 _dialog_decorator = None
 if hasattr(st, "dialog"):
@@ -80,6 +136,14 @@ else:
         _demo_dialog_body()
 
 
+def _navigate(page: str, demo: str | None = None) -> None:
+    st.query_params.clear()
+    st.query_params["page"] = page
+    if demo is not None:
+        st.query_params["demo"] = demo
+    st.rerun()
+
+
 _open_demo_dialog = str(st.query_params.get("demo", "")).strip() == "1"
 if _open_demo_dialog:
     try:
@@ -88,8 +152,8 @@ if _open_demo_dialog:
         pass
 
 st.markdown(
-    f"""
-    <section class="landing-shell">
+        f"""
+        <section class="landing-shell">
       <nav class="landing-nav">
         <div class="brand-wrap">
           <img class="brand-logo" src="{logo_data_uri}" alt="ReMatch" />
@@ -97,8 +161,8 @@ st.markdown(
           <span class="brand-tagline">AI-Powered Insured Name Matching for Reinsurance</span>
         </div>
         <div class="nav-cta">
-          <a class="cta-btn" href="?page=landing&demo=1" target="_self">Book a Demo</a>
-          <a class="cta-btn" href="?page=matcher" target="_self">Tool Play</a>
+                    <a class="cta-btn" data-nav="demo" href="?page=landing&demo=1" target="_self">Book a Demo</a>
+                    <a class="cta-btn" data-nav="matcher" href="?page=matcher" target="_self">Tool Play</a>
         </div>
       </nav>
 
@@ -111,14 +175,15 @@ st.markdown(
             matching methods, so the numbers you rely on are the numbers you can trust.
           </p>
           <div class="hero-cta">
-            <a class="cta-btn" href="?page=whymatch" target="_self">Why Match</a>
-                        <a class="cta-btn" href="?page=rematchpricing" target="_self">Price Model</a>
-            <a class="cta-btn" href="?page=howmatchworks" target="_self">How it Works</a>
+                        <a class="cta-btn" data-nav="whymatch" href="?page=whymatch" target="_self">Why Match</a>
+                        <a class="cta-btn" data-nav="pricing" href="?page=rematchpricing" target="_self">Price Model</a>
+                        <a class="cta-btn" data-nav="howmatchworks" href="?page=howmatchworks" target="_self">How it Works</a>
           </div>
         </div>
       </main>
     </section>
-    """,
+    """
+    ,
     unsafe_allow_html=True,
 )
 

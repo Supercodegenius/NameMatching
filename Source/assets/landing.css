@@ -15,6 +15,26 @@ body,
   min-height: 100%;
 }
 
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+.stApp,
+div[data-testid="stAppViewContainer"],
+section.main {
+  height: 100%;
+  overflow: hidden;
+}
+
+section[data-testid="stMain"],
+div[data-testid="stMain"] {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 div[data-testid="stAppViewContainer"],
 section.main {
   margin-top: 0 !important;
@@ -39,6 +59,19 @@ div[data-testid="stMainBlockContainer"],
   padding-right: 0 !important;
 }
 
+div[data-testid="stMainBlockContainer"]>div[data-testid="stVerticalBlock"],
+.block-container>div[data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+  row-gap: 0 !important;
+  column-gap: 0 !important;
+}
+
+div[data-testid="stMainBlockContainer"]>div[data-testid="stVerticalBlock"]>div[data-testid="stElementContainer"],
+.block-container>div[data-testid="stVerticalBlock"]>div[data-testid="stElementContainer"] {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
 .stApp {
   background:
     radial-gradient(55rem 30rem at 108% 92%, rgba(94, 157, 243, 0.14), transparent 62%),
@@ -57,6 +90,7 @@ footer {
 
 .landing-shell {
   min-height: 100vh;
+  box-sizing: border-box;
   position: relative;
   overflow: hidden;
   border-top: 1px solid rgba(18, 19, 26, 0.08);
@@ -161,7 +195,7 @@ footer {
 }
 
 .hero {
-  min-height: calc(100vh - 5.5rem);
+  min-height: calc(100vh - 5.5rem - 1px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -232,7 +266,7 @@ footer {
   }
 
   .hero {
-    min-height: calc(100vh - 6.6rem);
+    min-height: calc(100vh - 6.6rem - 1px);
     align-items: flex-start;
   }
 

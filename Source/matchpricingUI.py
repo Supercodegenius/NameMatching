@@ -11,7 +11,7 @@ from textwrap import dedent
 import streamlit as st
 
 
-FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png.jpeg")
+FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png")
 
 
 @lru_cache(maxsize=1)
@@ -218,6 +218,27 @@ st.markdown(
             margin: 0;
           }
 
+                    html,
+                    body {
+                        height: 100%;
+                        overflow: hidden !important;
+                    }
+
+                    .stApp,
+                    div[data-testid="stAppViewContainer"],
+                    section.main,
+                    div[data-testid="stAppViewContainer"] > .main {
+                        height: 100%;
+                        overflow: hidden !important;
+                    }
+
+                    section[data-testid="stMain"],
+                    div[data-testid="stMain"] {
+                        height: 100%;
+                        overflow-y: auto !important;
+                        overflow-x: hidden !important;
+                    }
+
           .stApp {
             background:
               radial-gradient(55rem 30rem at 108% 92%, rgba(94, 157, 243, 0.14), transparent 62%),
@@ -292,7 +313,7 @@ st.markdown(
             border-radius: 0.95rem;
             border: 1px solid rgba(18, 19, 26, 0.08);
             background: rgba(255, 255, 255, 0.88);
-            padding: 1.4rem 1.4rem 1.3rem;
+                        padding: 1.2rem 1.2rem 1.05rem;
             box-shadow: 0 14px 24px rgba(21, 34, 55, 0.12);
                         display: flex;
                         flex-direction: column;
@@ -322,11 +343,11 @@ st.markdown(
           }
 
           .pricing-list {
-            margin: 1rem 0 0;
+                        margin: 0.76rem 0 0;
             padding-left: 1.2rem;
             font-family: "Manrope", sans-serif;
             color: #343741;
-            line-height: 1.55;
+                        line-height: 1.45;
             font-size: 0.98rem;
                         flex: 1 1 auto;
           }
@@ -364,7 +385,7 @@ st.markdown(
 <li>0.5 GBP/search</li>
 <li>No integration required</li>
 </ul>
-<a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=payg" target="_self">Get Started</a>
+<div class="pricing-cta-btn">Get Started</div>
 </article>
 
 <article class="pricing-card">
@@ -376,7 +397,7 @@ st.markdown(
 <li>Agreed credit</li>
 <li>20% upfront discount</li>
 </ul>
-<a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=subscription" target="_self">Get Started</a>
+<div class="pricing-cta-btn">Get Started</div>
 </article>
 
 <article class="pricing-card">
@@ -387,7 +408,7 @@ st.markdown(
 <li>Role-based access control</li>
 <li>Audit logs</li>
 </ul>
-<a class="pricing-cta-btn" href="?page=rematchpricing&pricing_flow=subscription" target="_self">Get Started</a>
+<div class="pricing-cta-btn">Get Started</div>
 </article>
 </div>
 </section>
@@ -415,6 +436,18 @@ def _open_login_flow(flow: str = "payg") -> None:
     st.query_params["pricing_flow"] = flow
     st.session_state["pricing_show_login_dialog"] = True
     st.rerun()
+
+
+payg_col, sub_col, ent_col = st.columns(3)
+with payg_col:
+    if st.button("Get Started", type="primary", use_container_width=True, key="pricing_payg_get_started"):
+        _open_login_flow("payg")
+with sub_col:
+    if st.button("Get Started", type="primary", use_container_width=True, key="pricing_sub_get_started"):
+        _open_login_flow("subscription")
+with ent_col:
+    if st.button("Get Started", type="primary", use_container_width=True, key="pricing_ent_get_started"):
+        _open_login_flow("subscription")
 
 st.markdown(
         dedent(
@@ -475,7 +508,7 @@ st.markdown(
                 <section class="pricing-shell">
                     <div class="pricing-back-row">
                         <div></div>
-                        <a class="pricing-back-btn" href="?page=landing" target="_self">Back to Landing</a>
+                        <div class="pricing-back-btn">Back to Landing</div>
                         <div></div>
                     </div>
                 </section>
@@ -483,6 +516,16 @@ st.markdown(
         ),
         unsafe_allow_html=True,
 )
+
+st.markdown('<div style="height:0.55rem;"></div>', unsafe_allow_html=True)
+
+back_col_l, back_col_c, back_col_r = st.columns([4, 2, 4])
+with back_col_c:
+    if st.button("Back to Landing", type="primary", use_container_width=True, key="pricing_back_to_landing"):
+        st.query_params["page"] = "landing"
+        if "pricing_flow" in st.query_params:
+            del st.query_params["pricing_flow"]
+        st.rerun()
 
 
 pricing_flow = str(st.query_params.get("pricing_flow", "")).strip().lower()

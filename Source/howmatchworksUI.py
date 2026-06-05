@@ -1,11 +1,12 @@
 import os
+import time
 from textwrap import dedent
 
 import streamlit as st
 from streamlit.components.v1 import html
 
 
-FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png.jpeg")
+FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png")
 
 
 def _safe_set_page_config(**kwargs) -> None:
@@ -31,6 +32,27 @@ st.markdown(
           .stApp {
             margin: 0;
             min-height: 100%;
+          }
+
+          html,
+          body {
+            height: 100%;
+            overflow: hidden !important;
+          }
+
+          .stApp,
+          div[data-testid="stAppViewContainer"],
+          section.main,
+          div[data-testid="stAppViewContainer"] > .main {
+            height: 100%;
+            overflow: hidden !important;
+          }
+
+          section[data-testid="stMain"],
+          div[data-testid="stMain"] {
+            height: 100%;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
           }
 
           .stApp {
@@ -354,7 +376,7 @@ html(
                   <div class="hm-icon"><span class="hm-icon-mark">&#10003;</span></div>
                   <h2 class="hm-card-title">Multi-Method Matching Engine</h2>
                   <p class="hm-card-text">
-                    <span class="hm-highlight">6 algorithms</span> for unparalleled accuracy. Exact, Fuzzy, Soundex, Jaro-Winkler, Levenshtein &amp; AIMatch
+                    <span class="hm-highlight">9 algorithms</span> for unparalleled accuracy. Exact, Fuzzy, Soundex, Jaro-Winkler, Levenshtein, AIMatch, SLM Match, Vector Similarity, and SLM Adaptive Match
                   </p>
                 </article>
 
@@ -422,7 +444,7 @@ html(
         </html>
         """
     ),
-      height=420,
+      height=560,
       scrolling=True,
 )
 
@@ -456,8 +478,12 @@ st.markdown(
 
 left_spacer, button_col, right_spacer = st.columns([4, 2, 4])
 with button_col:
-    if st.button("Back to Landing", type="primary", use_container_width=True, key="how_match_works_back"):
-        st.query_params["page"] = "landing"
-        st.rerun()
+  back_clicked = st.button("Back to Landing", type="primary", use_container_width=True, key="how_match_works_back")
+
+if back_clicked:
+  st.query_params.clear()
+  st.query_params["page"] = "landing"
+  st.query_params["nav"] = str(int(time.time() * 1000))
+  st.rerun()
 
 

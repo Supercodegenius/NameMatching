@@ -5,6 +5,24 @@ This repository contains ReMatch, a BrainCal application for cleaning, normalizi
 
 ReMatch is designed for reinsurance teams that need accurate insured-name matching at scale. The app combines multiple matching methods, AI-assisted ranking, and a workflow-focused UI to reduce manual cleanup and improve confidence in downstream exposure and reporting outputs.
 
+## SLM Support
+
+The repository includes a local Small Language Model (SLM) matcher powered by a bi-encoder model in `outputs/biencoder`.
+
+- Supported SLM methods in the matcher: `SLM Match`, `Vector Similarity (SLM)`, and `SLM Adaptive Match`.
+- Standalone SLM tester page is available at query route `?page=slm`.
+- Model artifacts are expected under `outputs/biencoder/`.
+
+### Optional ANN Acceleration
+
+For faster large-scale semantic retrieval, install FAISS:
+
+```bash
+pip install faiss-cpu
+```
+
+If FAISS is not installed, SLM matching still works and falls back to non-ANN execution.
+
 # File Structure
 There is one branch for this course containing four chapter folders corresponding to the four chapters in the course. Inside these chapter folders are the coding exercise files. The naming convention for the exercise files is CHAPTER#_MOVIE#. As an example, the branch named 02_03 corresponds to the second chapter and the third video in that chapter.
 
