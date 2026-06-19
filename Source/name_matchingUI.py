@@ -11,6 +11,7 @@ import json
 import importlib.util
 import re
 import sqlite3
+import unicodedata
 import xml.etree.ElementTree as ET
 from io import BytesIO
 from typing import get_args
@@ -472,7 +473,7 @@ FEEDBACK_DB_PATH = os.path.join(BASE_DIR, "..", "outputs", "match_feedback.db")
 CONTROL_SETTINGS_XML_PATH = os.path.join(BASE_DIR, "control_settings.xml")
 
 CONTROL_REGISTRY = [
-    {"id": "data_upload_button", "type": "button", "label": "Data Upload"},
+    {"id": "data_upload_button", "type": "button", "label": "Smart Sanitizer"},
     {"id": "data_preview_button", "type": "button", "label": "Data Preview"},
     {"id": "run_name_matching_button", "type": "button", "label": "Run Name Matching"},
     {"id": "clear_chat_button", "type": "button", "label": "Clear chat"},
@@ -841,7 +842,7 @@ def _generate_slm_explanation(user_question: str, app_context: str = "") -> str:
             "3. **Embedding** — Your fine-tuned transformer encodes tokens into a dense vector.\n"
             "4. **Mean Pooling** — Token vectors are averaged to produce a sentence vector.\n"
             "5. **Cosine Similarity** — Dot product of unit-normalised vectors → score in `[-1, 1]`.\n"
-            "6. **Lexical Guard** — Seq ratio < 0.45 AND zero shared tokens → forced NO MATCH.\n"
+            "6. **Lexical Guard** — With zero shared tokens, stricter minimum sequence similarity is required: single-token pairs `0.72`, multi-token pairs `0.65`, mixed pairs `0.58`.\n"
             "7. **Threshold Decision** — Score ≥ threshold → **MATCH**, else **NO MATCH**.\n\n"
             "Ask: *why does \"Name A\" match \"Name B\"?* to score a pair live."
             + (f"\n\n**Current config:** {app_context}" if app_context else "")
@@ -852,7 +853,7 @@ def _generate_slm_explanation(user_question: str, app_context: str = "") -> str:
         return (
             f"**Troubleshooting mismatches** (method: **{current_method or 'unknown'}**, {ctx_threshold}):\n\n"
             "1. **Score too low** — Lower the threshold. Ask the assistant to score a specific pair.\n"
-            "2. **Lexical guard triggered** — Names share zero words and differ greatly in characters.\n"
+            "2. **Lexical guard triggered** — With zero shared words, sequence similarity did not clear the guard floor (`0.72` single-token, `0.65` multi-token, `0.58` mixed).\n"
             "3. **Normalisation mismatch** — Unusual suffixes or special characters may not normalise.\n"
             "4. **Wrong method** — Phonetic variants need `Soundex`; structural variations need `SLM`.\n\n"
             "**Quick debug:** Ask *\"why does \\\"Name A\\\" not match \\\"Name B\\\"?\"*"
@@ -894,6 +895,49 @@ def read_table(uploaded_file):
     if uploaded_file is None:
         return None
     return _read_table_from_bytes(uploaded_file.getvalue(), uploaded_file.name)
+
+
+RE_NEWLINES = re.compile(r"[\r\n]+")
+RE_SPACES = re.compile(r"\s+")
+RE_ENGLISH_PUNCT = re.compile(r"[!\"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]+")
+RE_SPECIAL_CHARS = re.compile(r"[^0-9A-Za-z\u4e00-\u9fff\u3040-\u30ff\s]+")
+RE_CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uf900-\ufaff]+")
+
+
+def _sanitize_selected_column(
+    series: pd.Series,
+    *,
+    remove_accented: bool,
+    normalize_spaces: bool,
+    remove_english_punctuation: bool,
+    remove_special_characters: bool,
+    remove_cjk: bool,
+) -> pd.Series:
+    cleaned = series.fillna("").astype(str)
+
+    if remove_accented:
+        cleaned = cleaned.map(
+            lambda x: unicodedata.normalize("NFKD", x).encode("ascii", "ignore").decode("utf-8")
+        )
+
+    if normalize_spaces:
+        cleaned = cleaned.str.replace(RE_NEWLINES, " ", regex=True)
+        cleaned = cleaned.str.replace(RE_SPACES, " ", regex=True)
+        cleaned = cleaned.str.strip()
+
+    if remove_english_punctuation:
+        cleaned = cleaned.str.replace(RE_ENGLISH_PUNCT, "", regex=True)
+
+    if remove_special_characters:
+        cleaned = cleaned.str.replace(RE_SPECIAL_CHARS, "", regex=True)
+
+    if remove_cjk:
+        cleaned = cleaned.str.replace(RE_CJK, "", regex=True)
+
+    if normalize_spaces:
+        cleaned = cleaned.str.replace(RE_SPACES, " ", regex=True).str.strip()
+
+    return cleaned
 
 
 def _init_data_upload_db(db_path: str) -> None:
@@ -1338,6 +1382,14 @@ def _fast_series_signature(values: pd.Series, sample_size: int = 256) -> str:
     return f"{total}:{sample_hash}"
 
 
+def _feedback_cache_token(db_path: str) -> str:
+    try:
+        stat_result = os.stat(db_path)
+        return f"{int(stat_result.st_mtime_ns)}:{int(stat_result.st_size)}"
+    except OSError:
+        return "0:0"
+
+
 @st.cache_data(show_spinner=False)
 def run_matching(
     left_values: tuple[str, ...],
@@ -1346,8 +1398,11 @@ def run_matching(
     fuzzy_threshold: int,
     levenshtein_max_distance: int,
     levenshtein_engine: str,
+    feedback_token: str = "",
 ) -> pd.DataFrame:
-    from Source.namematching import match_names
+    from Source.namematching import load_match_feedback, match_names
+
+    feedback = load_match_feedback(FEEDBACK_DB_PATH)
 
     return match_names(
         list(left_values),
@@ -1356,6 +1411,7 @@ def run_matching(
         fuzzy_threshold=fuzzy_threshold,
         lev_max_distance=levenshtein_max_distance,
         lev_engine=levenshtein_engine,
+        feedback=feedback,
     )
 
 
@@ -1369,11 +1425,12 @@ def run_matching_staged(
     fuzzy_threshold: int,
     levenshtein_max_distance: int,
     levenshtein_engine: str,
+    feedback_token: str = "",
     location_threshold: int = 85,
 ) -> pd.DataFrame:
     """Two-stage matching: filter reference rows by location first, then match on name within those candidates."""
     from collections import defaultdict
-    from Source.namematching import match_names, normalize_name, fuzzy_score
+    from Source.namematching import load_match_feedback, match_names, normalize_name, fuzzy_score
     try:
         from rapidfuzz import fuzz as rf_fuzz
         from rapidfuzz import process as rf_process
@@ -1385,6 +1442,7 @@ def run_matching_staged(
     left_locs_list = list(left_locs)
     right_list = list(right_values)
     right_locs_list = list(right_locs)
+    feedback = load_match_feedback(FEEDBACK_DB_PATH)
 
     right_locs_norm = [normalize_name(loc) for loc in right_locs_list]
     left_locs_norm = [normalize_name(loc) for loc in left_locs_list]
@@ -1438,6 +1496,7 @@ def run_matching_staged(
             fuzzy_threshold=fuzzy_threshold,
             lev_max_distance=levenshtein_max_distance,
             lev_engine=levenshtein_engine,
+            feedback=feedback,
         )
         for row_pos, src_idx in enumerate(src_indices):
             result_rows[src_idx] = sub_df.iloc[row_pos].to_dict()
@@ -1448,7 +1507,7 @@ def run_matching_staged(
 with st.sidebar:
     st.markdown('<div class="nm-sidebar-menu">', unsafe_allow_html=True)
     menu_options = {
-        "Data Upload": "📥 Data Upload",
+        "Data Upload": "📥 Smart Sanitizer",
         "Name Matching": "🔎 Name Matching",
         "Bulk Name Matching": "📦 Bulk Name Matching",
         "AirlineMatching": "✈️ Airline Matching",
@@ -1456,7 +1515,7 @@ with st.sidebar:
         "Admin": "⚙️ Admin",
         "SLM": "🤖 SLM",
     }
-    disabled_menu_items = {"Data Upload", "SLM", "Admin"}
+    disabled_menu_items = {"SLM", "Admin"}
     if "sidebar_menu" not in st.session_state:
         st.session_state["sidebar_menu"] = "Name Matching"
     elif st.session_state["sidebar_menu"] == "ReLink":
@@ -1653,7 +1712,7 @@ if sidebar_menu == "Data Upload":
         vertical_alignment="center",
     )
     with title_col:
-        st.markdown("<h2 style='margin:0;'>Data Upload</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='margin:0;'>Smart Sanitizer</h2>", unsafe_allow_html=True)
     with selector_label_col:
         st.markdown("<p style='margin:0; font-weight:700;'>Source file selector</p>", unsafe_allow_html=True)
     with selector_input_col:
@@ -1717,6 +1776,38 @@ if sidebar_menu == "Data Upload":
         if source_upload_df is None:
             st.warning("Could not read the selected file.")
         else:
+            source_columns = [str(col) for col in source_upload_df.columns.tolist()]
+            selected_sanitizer_column = st.selectbox(
+                "Column selector",
+                options=source_columns,
+                key="smart_sanitizer_column_selector",
+                help="Select the uploaded sheet column to target in Smart Sanitizer.",
+            )
+            st.session_state["smart_sanitizer_selected_column"] = selected_sanitizer_column
+
+            option_col_1, option_col_2 = st.columns(2, gap="small")
+            col1, col2, col3, col4, col5 = st.columns(5)
+            with col1:
+                sanitize_accented = st.checkbox("ACCC", value=True)
+            with col2:
+                sanitize_newlines_spaces = st.checkbox("NSCC", value=True)
+            with col3:
+                sanitize_english_punct = st.checkbox("EPCC", value=True)
+            with col4:
+                sanitize_special_chars = st.checkbox("SPCC", value=True)
+            with col5:
+                sanitize_cjk = st.checkbox("CJCC", value=False)
+
+            mapping_df = pd.DataFrame(
+                [
+                    {
+                        "Source Column": selected_sanitizer_column,
+                        "Destination Column": selected_sanitizer_column,
+                    }
+                ]
+            )
+            st.session_state["data_upload_column_mapping"] = mapping_df
+
             file_col, preview_col = st.columns([4, 1], gap="small")
             with file_col:
                 st.success(f"Selected: `{uploaded_source_file.name}`")
@@ -1730,50 +1821,6 @@ if sidebar_menu == "Data Upload":
             if preview_clicked:
                 with st.expander("Uploaded Data Preview", expanded=True):
                     st.dataframe(source_upload_df.head(100), use_container_width=True, height=320)
-
-            st.markdown("### Source and Destination Column Mapping")
-            st.caption("Map each source column to a destination column using dropdowns.")
-
-            source_columns = [str(col) for col in source_upload_df.columns.tolist()]
-            header_col1, header_col2 = st.columns(2, gap="small")
-            with header_col1:
-                st.markdown("**Source Columns**")
-            with header_col2:
-                st.markdown("**Destination Columns**")
-
-            mapped_rows: list[dict[str, str]] = []
-            for idx, default_source in enumerate(source_columns):
-                row_col1, row_col2 = st.columns(2, gap="small")
-                with row_col1:
-                    selected_source = st.selectbox(
-                        f"Source Column {idx + 1}",
-                        options=source_columns,
-                        index=idx,
-                        key=f"data_upload_source_col_{idx}",
-                        label_visibility="collapsed",
-                    )
-                with row_col2:
-                    default_dest_index = (
-                        source_columns.index(default_source)
-                        if default_source in source_columns
-                        else 0
-                    )
-                    selected_destination = st.selectbox(
-                        f"Destination Column {idx + 1}",
-                        options=source_columns,
-                        index=default_dest_index,
-                        key=f"data_upload_dest_col_{idx}",
-                        label_visibility="collapsed",
-                    )
-                mapped_rows.append(
-                    {
-                        "Source Column": selected_source,
-                        "Destination Column": selected_destination,
-                    }
-                )
-
-            mapping_df = pd.DataFrame(mapped_rows)
-            st.session_state["data_upload_column_mapping"] = mapping_df
     else:
         st.info("Choose a CSV/XLSX file.")
 
@@ -1787,7 +1834,7 @@ if sidebar_menu == "Data Upload":
         )
     with action_upload_col:
         upload_button_clicked = st.button(
-            "Data Upload",
+            "Smart Sanitizer",
             type="primary",
             use_container_width=True,
             disabled=(
@@ -1801,32 +1848,39 @@ if sidebar_menu == "Data Upload":
         st.rerun()
 
     if upload_button_clicked and uploaded_source_file is not None and source_upload_df is not None:
-        with st.spinner("Saving uploaded data to DB..."):
-            upload_id, saved_row_count = _save_data_upload_to_db(
-                source_upload_df,
-                mapping_df,
-                uploaded_source_file.name,
-            )
-            access_save_note = ""
-            if save_to_access and str(access_db_path or "").strip():
-                try:
-                    _, access_saved_rows, access_saved_table = _save_data_upload_to_access(
-                        source_upload_df,
-                        mapping_df,
-                        uploaded_source_file.name,
-                        access_db_path,
-                        access_table_name,
-                    )
-                    access_save_note = (
-                        " | Access saved rows: "
-                        f"{access_saved_rows} to table `{access_saved_table}`"
-                    )
-                except Exception as exc:
-                    st.warning(f"SQLite save succeeded, but Access save failed: {exc}")
-        st.success(
-            f"Data uploaded to DB successfully. Upload ID: `{upload_id}`. "
-            f"Saved rows: {saved_row_count}. DB: `{DATA_UPLOAD_DB_PATH}`{access_save_note}"
+        if not any(
+            [
+                sanitize_accented,
+                sanitize_newlines_spaces,
+                sanitize_english_punct,
+                sanitize_special_chars,
+                sanitize_cjk,
+            ]
+        ):
+            st.warning("Select at least one sanitizer option before running Smart Sanitizer.")
+            st.stop()
+
+        cleaned_df = source_upload_df.copy()
+        cleaned_df[selected_sanitizer_column] = _sanitize_selected_column(
+            cleaned_df[selected_sanitizer_column],
+            remove_accented=sanitize_accented,
+            normalize_spaces=sanitize_newlines_spaces,
+            remove_english_punctuation=sanitize_english_punct,
+            remove_special_characters=sanitize_special_chars,
+            remove_cjk=sanitize_cjk,
         )
+        st.session_state["smart_sanitizer_output_df"] = cleaned_df
+
+        preview_df = pd.DataFrame(
+            {
+                "Original": source_upload_df[selected_sanitizer_column].fillna("").astype(str).head(20),
+                "Sanitized": cleaned_df[selected_sanitizer_column].fillna("").astype(str).head(20),
+            }
+        )
+
+        st.success(f"Smart Sanitizer completed for column `{selected_sanitizer_column}`.")
+        st.dataframe(preview_df, use_container_width=True)
+        st.caption("DB/Access save flow is temporarily disabled.")
 
     st.markdown("Switch to **Name Matching** from the left menu to run matching.")
     st.stop()
@@ -2312,6 +2366,7 @@ if run_now:
                     st.caption(f"SLM pre-prime skipped: {exc}")
 
     with st.spinner("Matching names..."):
+        _feedback_token = _feedback_cache_token(FEEDBACK_DB_PATH)
         _use_staged = (
             include_location
             and left_location_col is not None
@@ -2329,6 +2384,7 @@ if run_now:
                 int(threshold),
                 int(lev_max_distance),
                 lev_engine,
+                _feedback_token,
             )
         else:
             st.session_state["result_df"] = run_matching(
@@ -2338,6 +2394,7 @@ if run_now:
                 int(threshold),
                 int(lev_max_distance),
                 lev_engine,
+                _feedback_token,
             )
     st.session_state["scroll_to_top_matches"] = True
     has_results = True

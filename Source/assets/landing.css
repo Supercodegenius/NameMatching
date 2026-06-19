@@ -96,6 +96,73 @@ footer {
   border-top: 1px solid rgba(18, 19, 26, 0.08);
 }
 
+/* CLEAN, NON-CACHED CLASSES */
+
+.btn-touch-clean {
+  background: #0055ff;
+  color: #fff;
+  padding: 10px 22px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.btn-touch-clean:hover {
+  background: #003fcc;
+}
+
+.btn-nav-clean {
+  padding: 10px 22px;
+  border-radius: 6px;
+  background: #e8e8e8;
+  color: #000;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.btn-nav-clean:hover {
+  background: #d0d0d0;
+}
+
+.brand-logo-clean {
+  height: 42px;
+}
+
+/* CLEAN, NON-CACHED CLASSES */
+
+.btn-touch-clean {
+  background: #0055ff;
+  color: #fff;
+  padding: 10px 22px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.btn-touch-clean:hover {
+  background: #003fcc;
+}
+
+.btn-nav-clean {
+  padding: 10px 22px;
+  border-radius: 6px;
+  background: #e8e8e8;
+  color: #000;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.btn-nav-clean:hover {
+  background: #d0d0d0;
+}
+
+.brand-logo-clean {
+  height: 42px;
+}
+
+
 .landing-shell::after {
   content: "";
   position: absolute;
@@ -125,9 +192,9 @@ footer {
 
 .nav-cta {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 0.55rem;
-  align-items: flex-end;
+  align-items: center;
 }
 
 .brand-wrap {
