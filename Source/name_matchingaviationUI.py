@@ -20,7 +20,7 @@ import pandas as pd
 import streamlit as st
 from streamlit.components.v1 import html
 
-FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png")
+FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png.jpeg")
 
 
 def _safe_set_page_config(**kwargs) -> None:
@@ -40,6 +40,7 @@ _safe_set_page_config(
 
 st.markdown(
     """
+    
     <style>
       :root {
         --nm-page-bg: #e8edf6;
@@ -338,16 +339,14 @@ st.markdown(
         font-weight: 700;
       }
       .nm-muted { color: var(--nm-muted); opacity: 1; }
-            .stButton > button[kind="primary"],
-            .stDownloadButton > button[kind="primary"] {
+      .stButton > button[kind="primary"] {
         border: 0;
         border-radius: 0.6rem;
         background: linear-gradient(90deg, #143f98 0%, #1e54bc 100%);
         color: #f6faff;
         box-shadow: 0 8px 18px rgba(20, 63, 152, 0.28);
       }
-            .stButton > button[kind="primary"]:hover,
-            .stDownloadButton > button[kind="primary"]:hover {
+      .stButton > button[kind="primary"]:hover {
         filter: brightness(1.03);
       }
       .nm-footer {
@@ -582,30 +581,262 @@ def _slm_matching_available() -> tuple[bool, str | None]:
     return bool(health.get("ready", False)), health.get("reason")
 
 
-def _get_openai_client():
-    api_key = None
+def _parse_ctx_value(app_context: str, key: str) -> str:
+    """Extract a value from the app_context string by key label."""
+    for line in app_context.splitlines():
+        if line.strip().lower().startswith(key.lower()):
+            parts = line.split(":", 1)
+            if len(parts) == 2:
+                return parts[1].strip()
+    return ""
+
+
+def _extract_name_pair(question: str) -> tuple[str, str] | None:
+    """
+    Try to extract two quoted names from the question, e.g.:
+      'why does "AXA XL" match "AXA XL Re"?'
+      "explain 'British Airways' vs 'BA'"
+    Returns (name_a, name_b) or None if not found.
+    """
+    import re as _re
+    patterns = [
+        r'["\u2018\u2019\u201c\u201d]([^"\']+)["\u2018\u2019\u201c\u201d]\s*(?:vs?\.?|and|versus|match|compare)?\s*["\u2018\u2019\u201c\u201d]([^"\']+)["\u2018\u2019\u201c\u201d]',
+        r"'([^']+)'\s*(?:vs?\.?|and|versus|match|compare)?\s*'([^']+)'",
+    ]
+    for pat in patterns:
+        m = _re.search(pat, question, _re.IGNORECASE)
+        if m:
+            return m.group(1).strip(), m.group(2).strip()
+    return None
+
+
+def _slm_trace_explanation(name_a: str, name_b: str, threshold_str: str) -> str:
+    """Run score_pair_with_trace on the SLM and return a human-readable explanation."""
     try:
-        api_key = st.secrets.get("OPENAI_API_KEY")
-    except Exception:
-        api_key = None
-
-    api_key = api_key or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return None
+        from Source.slm_ui import load_model, score_pair_with_trace
+    except ImportError:
+        try:
+            from slm_ui import load_model, score_pair_with_trace
+        except ImportError:
+            return (
+                f"Could not load the SLM model to score **{name_a}** vs **{name_b}**. "
+                "Ensure the model files are present in `outputs/biencoder/`."
+            )
 
     try:
-        from openai import OpenAI
+        threshold = float(threshold_str) if threshold_str else 0.75
+        # SLM threshold is stored as 0-100 in the UI slider but used as 0-1 internally
+        if threshold > 1.0:
+            threshold = threshold / 100.0
+    except ValueError:
+        threshold = 0.75
 
-        return OpenAI(api_key=api_key)
-    except Exception:
-        return None
+    try:
+        tokenizer, encoder, device, _ = load_model()
+        trace = score_pair_with_trace(
+            name_a, name_b, tokenizer, encoder, device,
+            normalize=True, threshold=threshold
+        )
+    except Exception as exc:
+        return f"SLM scoring failed for **{name_a}** vs **{name_b}**: `{type(exc).__name__}: {exc}`"
+
+    score = float(trace["score"])
+    prediction = trace["prediction"]
+    norm_a = trace["normalized_a"]
+    norm_b = trace["normalized_b"]
+    lm = trace["debug"]["lexical_metrics"]
+    guard = trace["debug"]["lexical_guard_triggered"]
+    seq_ratio = float(lm["sequence_ratio"])
+    tok_overlap = int(lm["token_overlap_count"])
+    tok_ratio = float(lm["token_overlap_ratio"])
+
+    verdict = "✅ **MATCH**" if prediction == "MATCH" else "❌ **NO MATCH**"
+
+    lines = [
+        f"### SLM Analysis: `{name_a}` vs `{name_b}`",
+        "",
+        f"**Verdict**: {verdict}  |  **Score**: `{score:.4f}`  |  **Threshold**: `{threshold:.2f}`",
+        "",
+        "#### Normalisation",
+        f"- Input A → `{norm_a}`",
+        f"- Input B → `{norm_b}`",
+        "",
+        "#### Lexical Guard Metrics",
+        f"- Sequence similarity: `{seq_ratio:.3f}` {'⚠️ low' if seq_ratio < 0.45 else '✔'}",
+        f"- Shared token count: `{tok_overlap}`",
+        f"- Token overlap ratio: `{tok_ratio:.3f}`",
+    ]
+
+    if guard:
+        lines += [
+            "",
+            "#### Why no match?",
+            "The **lexical guard** blocked this pair. The names share no common tokens and have "
+            f"very low character-level similarity (`{seq_ratio:.3f}`), so the SLM's high embedding "
+            "score was overridden to prevent a false positive.",
+        ]
+    elif prediction == "NO MATCH":
+        lines += [
+            "",
+            "#### Why no match?",
+            f"The cosine similarity `{score:.4f}` is below the threshold `{threshold:.2f}`. "
+            "The names are semantically different in the embedding space.",
+        ]
+    else:
+        lines += [
+            "",
+            "#### Why matched?",
+            f"Cosine similarity `{score:.4f}` ≥ threshold `{threshold:.2f}` and the lexical guard "
+            f"passed (sequence ratio `{seq_ratio:.3f}`, token overlap `{tok_overlap}`). "
+            "The SLM considers these names semantically equivalent.",
+        ]
+
+    return "\n".join(lines)
 
 
-def _chat_system_prompt() -> str:
+def _generate_slm_explanation(user_question: str, app_context: str = "") -> str:
+    """
+    Generate a specific, data-driven explanation using the SLM model.
+    All processing is local — no external API calls.
+    """
+    question_lower = user_question.lower()
+
+    # --- Specific pair scoring: detect quoted name pairs in the question ---
+    pair = _extract_name_pair(user_question)
+    if pair:
+        threshold_str = _parse_ctx_value(app_context, "Fuzzy threshold")
+        return _slm_trace_explanation(pair[0], pair[1], threshold_str)
+
+    # --- Questions about the current results ---
+    result_df: pd.DataFrame | None = st.session_state.get("result_df")
+    current_method = _parse_ctx_value(app_context, "Selected method")
+    current_threshold = _parse_ctx_value(app_context, "Fuzzy threshold")
+    rows_in_result = _parse_ctx_value(app_context, "Rows in result")
+    method_key_val = _parse_ctx_value(app_context, "Method key")
+
+    if "how many" in question_lower or "count" in question_lower or "summary" in question_lower:
+        if result_df is not None and not result_df.empty:
+            total = len(result_df)
+            matched = int(result_df["is_match"].sum()) if "is_match" in result_df.columns else "N/A"
+            unmatched = total - matched if matched != "N/A" else "N/A"
+            match_rate = f"{matched / total * 100:.1f}%" if matched != "N/A" and total > 0 else "N/A"
+            return (
+                f"### Current Result Summary\n\n"
+                f"| Metric | Value |\n|---|---|\n"
+                f"| Total rows | `{total}` |\n"
+                f"| Matched | `{matched}` |\n"
+                f"| Unmatched | `{unmatched}` |\n"
+                f"| Match rate | `{match_rate}` |\n"
+                f"| Method used | `{current_method}` |\n"
+                f"| Threshold | `{current_threshold}` |"
+            )
+        return "No match results are available yet. Run matching first, then ask for a summary."
+
+    if "unmatched" in question_lower or "failed" in question_lower or "did not match" in question_lower:
+        if result_df is not None and "is_match" in result_df.columns:
+            unmatched_df = result_df[~result_df["is_match"]]
+            count = len(unmatched_df)
+            if count == 0:
+                return f"All `{len(result_df)}` rows matched successfully with method **{current_method}** at threshold `{current_threshold}`."
+            # Show first few unmatched source names
+            src_col = next((c for c in result_df.columns if "source" in c.lower() or c.lower() in ("name_a", "name a")), None)
+            if src_col:
+                samples = unmatched_df[src_col].dropna().head(10).tolist()
+                sample_list = "\n".join(f"- `{n}`" for n in samples)
+                return (
+                    f"**{count}** rows did not match (out of `{len(result_df)}` total) "
+                    f"using **{current_method}** at threshold `{current_threshold}`.\n\n"
+                    f"**Sample unmatched source names:**\n{sample_list}\n\n"
+                    f"To investigate a specific pair, ask: *why does \"NameA\" not match \"NameB\"?*"
+                )
+            return (
+                f"**{count}** rows did not match out of `{len(result_df)}` total. "
+                f"Method: **{current_method}**, threshold: `{current_threshold}`."
+            )
+        return "No result data available. Run matching first."
+
+    if "best method" in question_lower or "which method" in question_lower:
+        ctx = f" (you are currently using **{current_method}**)" if current_method else ""
+        return (
+            f"**Recommended methods by use case{ctx}:**\n\n"
+            "| Use Case | Recommended Method |\n|---|---|\n"
+            "| Exact name matching | `Exact` |\n"
+            "| Slight typos / abbreviations | `SLM` or `Fuzzy` |\n"
+            "| Phonetic variants (e.g. colour/color) | `Soundex` |\n"
+            "| Aviation/ICAO code expansion | `SLM Adaptive` |\n"
+            "| Highest semantic accuracy | `SLM` or `Vector Similarity` |\n\n"
+            "The **SLM** method uses your locally trained transformer to embed names and compare "
+            "them as vectors — best for messy, real-world data with abbreviations and word-order variations."
+            + (f"\n\n**App context:**\n{app_context}" if app_context else "")
+        )
+
+    if "threshold" in question_lower or "tune" in question_lower or "false positive" in question_lower or "false negative" in question_lower:
+        ctx_threshold = f"Your current threshold is `{current_threshold}`." if current_threshold else ""
+        score_dist = ""
+        if result_df is not None and "score" in result_df.columns:
+            scores = result_df["score"].dropna()
+            if not scores.empty:
+                score_dist = (
+                    f"\n\n**Score distribution in current results** (`{len(scores)}` rows):\n"
+                    f"- Min: `{scores.min():.4f}` | Max: `{scores.max():.4f}` | Mean: `{scores.mean():.4f}` | Median: `{scores.median():.4f}`"
+                )
+        return (
+            f"**Threshold tuning guide:**\n\n"
+            f"{ctx_threshold}\n\n"
+            "| Threshold range | Effect |\n|---|---|\n"
+            "| `0.85 – 1.00` | Very strict — only near-identical names match |\n"
+            "| `0.70 – 0.84` | Balanced — catches common variations |\n"
+            "| `0.55 – 0.69` | Lenient — higher recall, more false positives |\n\n"
+            "**Tip:** Score specific borderline pairs by asking: "
+            "*\"why does \\\"Name A\\\" match \\\"Name B\\\"?\"* to see the exact SLM score."
+            + score_dist
+        )
+
+    if "explain" in question_lower or "how does" in question_lower or "how it works" in question_lower:
+        return (
+            "### How the SLM Matcher Works\n\n"
+            "1. **Normalisation** — Legal suffixes (Ltd, GmbH, Plc…), punctuation, and accents are stripped. "
+            "Aviation codes are expanded to full names.\n"
+            "2. **Tokenisation** — Each normalised name is split into subword tokens (max 64 tokens).\n"
+            "3. **Embedding** — Your fine-tuned transformer encodes each token sequence into a dense vector.\n"
+            "4. **Mean Pooling** — Token vectors are averaged (attention-mask-weighted) to produce a single sentence vector.\n"
+            "5. **Cosine Similarity** — The two unit-normalised vectors are dot-producted to get a score in `[-1, 1]`.\n"
+            "6. **Lexical Guard** — If sequence ratio < 0.45 AND zero shared tokens, the pair is forced to NO MATCH "
+            "regardless of embedding score (prevents false positives).\n"
+            "7. **Threshold Decision** — Score ≥ threshold → **MATCH**, else **NO MATCH**.\n\n"
+            "To score a specific pair, ask: *why does \"Name A\" match \"Name B\"?*"
+            + (f"\n\n**Current config:** {app_context}" if app_context else "")
+        )
+
+    if "troubleshoot" in question_lower or "not match" in question_lower or "mismatch" in question_lower or "miss" in question_lower:
+        ctx_threshold = f"current threshold `{current_threshold}`" if current_threshold else "your threshold"
+        return (
+            f"**Troubleshooting mismatches** (method: **{current_method or 'unknown'}**, {ctx_threshold}):\n\n"
+            "1. **Score too low** — Lower the threshold slightly. Ask the assistant to score the specific pair to see exactly where it falls.\n"
+            "2. **Lexical guard triggered** — If names share zero words and have very different character patterns, "
+            "the guard blocks the match. Consider adding the shared context (e.g. country, IATA code) as extra columns.\n"
+            "3. **Normalisation mismatch** — Unusual legal suffixes or special characters may not normalise correctly. "
+            "Check the 'Score Pair' trace in the SLM Tester tab.\n"
+            "4. **Wrong method** — Phonetic variants may need `Soundex`; structural variations need `SLM`.\n\n"
+            "**Quick debug:** Ask *\"why does \\\"Name A\\\" not match \\\"Name B\\\"?\"* and the SLM will score it live."
+            + (f"\n\n**Rows in current result:** {rows_in_result}" if rows_in_result else "")
+        )
+
+    # Fallback: still contextual based on what's loaded
+    loaded_info = ""
+    if result_df is not None:
+        total = len(result_df)
+        matched = int(result_df["is_match"].sum()) if "is_match" in result_df.columns else "?"
+        loaded_info = f"\n\nYou have **{total}** rows loaded with **{matched}** matches using **{current_method}** at threshold `{current_threshold}`."
     return (
-        "You are a helpful assistant embedded in a Streamlit name matching app. "
-        "Give concise and practical guidance about matching methods, thresholds, score interpretation, "
-        "and troubleshooting. Do not request or reveal API keys."
+        "I can answer specific questions about your name matching results.\n\n"
+        "**Try asking:**\n"
+        "- *Why does \"British Airways\" match \"BA\"?*  ← scores the pair live with the SLM\n"
+        "- *How many rows did not match?*\n"
+        "- *How do I tune the threshold?*\n"
+        "- *Explain how the SLM matcher works*\n"
+        "- *Troubleshoot my mismatches*"
+        + loaded_info
     )
 
 
@@ -622,48 +853,52 @@ def _read_demo_csv(path: str, file_mtime: float) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def _uploaded_file_signature(uploaded_file) -> str:
+    file_id = getattr(uploaded_file, "file_id", None)
+    return f"{uploaded_file.name}:{getattr(uploaded_file, 'size', 0)}:{file_id}"
+
+
 def read_table(uploaded_file):
     if uploaded_file is None:
         return None
-    return _read_table_from_bytes(uploaded_file.getvalue(), uploaded_file.name)
 
+    cache_key = "_uploaded_table_cache"
+    cache = st.session_state.setdefault(cache_key, {})
+    signature = _uploaded_file_signature(uploaded_file)
 
-def _build_sanitizer_download_payload(
-    source_df: pd.DataFrame,
-    source_filename: str,
-    selected_column: str,
-    sanitized_values: pd.Series,
-) -> tuple[bytes, str, str]:
-    export_df = source_df.copy()
-    sanitized_column_name = "Sanitised"
-    insert_at = export_df.columns.get_loc(selected_column) + 1
-    export_df.insert(insert_at, sanitized_column_name, sanitized_values.fillna("").astype(str))
+    if signature in cache:
+        return cache[signature]
 
-    base_name, extension = os.path.splitext(source_filename)
-    if extension.lower() == ".csv":
-        return export_df.to_csv(index=False).encode("utf-8"), f"{base_name}_sanitised.csv", "text/csv"
+    df = _read_table_from_bytes(uploaded_file.getvalue(), uploaded_file.name)
+    cache[signature] = df
 
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        export_df.to_excel(writer, index=False)
-    buffer.seek(0)
-    return (
-        buffer.getvalue(),
-        f"{base_name}_sanitised.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    # Keep cache bounded for long sessions with many uploads.
+    if len(cache) > 10:
+        oldest_key = next(iter(cache))
+        del cache[oldest_key]
+
+    return df
 
 
 RE_NEWLINES = re.compile(r"[\r\n]+")
 RE_SPACES = re.compile(r"\s+")
 RE_ENGLISH_PUNCT = re.compile(r"[!\"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]+")
-RE_SPECIAL_CHARS = re.compile(r"[^0-9A-Za-z\u4e00-\u9fff\u3040-\u30ff\s]+")
+RE_SPECIAL_CHARS = re.compile(r"[^0-9A-Za-z\u00df\u1e9e\u4e00-\u9fff\u3040-\u30ff\s]+")
 RE_CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uf900-\ufaff]+")
+RE_NUMBERS = re.compile(r"\d+")
+RE_ROMAN_NUMERALS = re.compile(
+    r"\b(?=[MDCLXVI]+\b)M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})\b",
+    re.IGNORECASE,
+)
+RE_HTML_TAGS = re.compile(r"<[^>]+>")
 
 
 def _sanitize_selected_column(
     series: pd.Series,
     *,
+    remove_eszett: bool,
+    remove_numbers_roman: bool,
+    remove_html_content: bool,
     remove_accented: bool,
     normalize_spaces: bool,
     remove_english_punctuation: bool,
@@ -671,6 +906,16 @@ def _sanitize_selected_column(
     remove_cjk: bool,
 ) -> pd.Series:
     cleaned = series.fillna("").astype(str)
+
+    if remove_eszett:
+        cleaned = cleaned.str.replace("ß", "ss", regex=False).str.replace("ẞ", "SS", regex=False)
+
+    if remove_numbers_roman:
+        cleaned = cleaned.str.replace(RE_NUMBERS, "", regex=True)
+        cleaned = cleaned.str.replace(RE_ROMAN_NUMERALS, "", regex=True)
+
+    if remove_html_content:
+        cleaned = cleaned.str.replace(RE_HTML_TAGS, " ", regex=True)
 
     if remove_accented:
         cleaned = cleaned.map(
@@ -795,6 +1040,58 @@ def _compose_match_values(
         col_values = df[col_name].fillna("").astype(str).str.strip()
         combined_values = combined_values.where(col_values.eq(""), combined_values + " " + col_values)
     return combined_values.str.replace(r"\s+", " ", regex=True).str.strip()
+
+
+def _normalize_header_token(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _drop_header_like_rows(
+    df: pd.DataFrame,
+    selected_cols: list[str],
+    *,
+    scan_rows: int = 3,
+) -> tuple[pd.DataFrame, int]:
+    """Drop leading rows that look like duplicated headers in selected columns."""
+    if df.empty:
+        return df, 0
+
+    cols = [col for col in selected_cols if col in df.columns]
+    if not cols:
+        return df, 0
+
+    primary_col = cols[0]
+    to_drop: list[object] = []
+    max_scan = min(len(df), max(1, int(scan_rows)))
+
+    for pos in range(max_scan):
+        idx = df.index[pos]
+        row = df.loc[idx]
+
+        primary_value = _normalize_header_token(str(row.get(primary_col, "")))
+        if not primary_value or primary_value != _normalize_header_token(primary_col):
+            continue
+
+        compared = 0
+        matched = 0
+        for col in cols:
+            raw_value = str(row.get(col, "")).strip()
+            if not raw_value:
+                continue
+            compared += 1
+            if _normalize_header_token(raw_value) == _normalize_header_token(col):
+                matched += 1
+
+        if compared == 1 and matched == 1:
+            to_drop.append(idx)
+        elif compared >= 2 and matched >= 2:
+            to_drop.append(idx)
+
+    if not to_drop:
+        return df, 0
+
+    cleaned = df.drop(index=to_drop).reset_index(drop=True)
+    return cleaned, len(to_drop)
 
 
 def _fast_series_signature(values: pd.Series, sample_size: int = 256) -> str:
@@ -984,7 +1281,7 @@ if sidebar_menu == "Bulk Name Matching":
                 st.caption(slm_unavailable_reason)
 
             if _bulk_method_sel in {"FNCCLT Match", "JNCCLT Match", "AINCCLT Match", "SLM Match", "Vector Similarity (SLM)", "SLM Adaptive Match"}:
-                st.slider(f"{_bulk_method_sel} + threshold", 0, 100, 75, 1, key="bulk_threshold")
+                st.slider("Fuzzy threshold", 0, 100, 75, 1, key="bulk_threshold")
             if _bulk_method_sel == "LNCCLT Match":
                 st.slider("Levenshtein max distance", 0, 10, 2, 1, key="bulk_lev_distance")
                 st.selectbox(
@@ -1007,7 +1304,7 @@ with st.sidebar:
     st.header("Matching Settings")
     st.caption("Configure matching and provide data.")
 
-    use_demo_files = st.toggle("Use built-in demo files", value=True)
+    use_demo_files = st.toggle("Use built-in demo files", value=False)
     slm_health = _slm_health_status()
     slm_available, slm_unavailable_reason = _slm_matching_available()
 
@@ -1034,9 +1331,9 @@ with st.sidebar:
         lev_max_distance = 2
         lev_engine = "auto"
         if method in {"FNCCLT Match", "JNCCLT Match", "AINCCLT Match", "SLM Match", "Vector Similarity (SLM)", "SLM Adaptive Match"}:
-            threshold = st.slider(f"{method} threshold", 0, 100, 75, 1)
+            threshold = st.slider("Fuzzy threshold", 0, 100, 75, 1)
         if method == "LNCCLT Match":
-            lev_max_distance = st.slider("LNCCLT max distance", 0, 10, 2, 1)
+            lev_max_distance = st.slider("Levenshtein max distance", 0, 10, 2, 1)
             lev_engine = st.selectbox(
                 "Levenshtein engine",
                 ["Auto", "RapidFuzz", "Python"],
@@ -1131,18 +1428,15 @@ if sidebar_menu == "Data Upload":
             )
             st.session_state["smart_sanitizer_selected_column"] = selected_sanitizer_column
 
-            option_col_1, option_col_2 = st.columns(2, gap="small")
-            col1, col2, col3, col4, col5 = st.columns(5)
-            with col1:
-                sanitize_accented = st.checkbox("ACCC", value=True)
-            with col2:
-                sanitize_newlines_spaces = st.checkbox("NSCC", value=True)
-            with col3:
-                sanitize_english_punct = st.checkbox("EPCC", value=True)
-            with col4:
-                sanitize_special_chars = st.checkbox("SPCC", value=True)
-            with col5:
-                sanitize_cjk = st.checkbox("CJCC", value=False)
+            st.caption("Sanitizer options")
+            sanitize_accented = st.checkbox("ACCC", value=True, key="sanitizer_accc")
+            sanitize_newlines_spaces = st.checkbox("NSCC", value=True, key="sanitizer_nscc")
+            sanitize_english_punct = st.checkbox("EPCC", value=True, key="sanitizer_epcc")
+            sanitize_special_chars = st.checkbox("SPCC", value=True, key="sanitizer_spcc")
+            sanitize_cjk = st.checkbox("CJCC", value=False, key="sanitizer_cjcc")
+            sanitize_eszett = st.checkbox("ESCC", value=False, key="sanitizer_escc")
+            sanitize_numbers_roman = st.checkbox("NRCC", value=False, key="sanitizer_nrcc")
+            sanitize_html_content = st.checkbox("HTCC", value=False, key="sanitizer_htcc")
 
             mapping_df = pd.DataFrame(
                 [
@@ -1160,7 +1454,6 @@ if sidebar_menu == "Data Upload":
             with preview_col:
                 preview_clicked = st.button(
                     "Data Preview",
-                    type="primary",
                     use_container_width=True,
                     disabled=not _is_control_enabled("data_preview_button"),
                 )
@@ -1171,7 +1464,7 @@ if sidebar_menu == "Data Upload":
     else:
         st.info("Choose a CSV/XLSX file.")
 
-    button_col_1, button_col_2, button_col_3 = st.columns(3, gap="small")
+    button_col_1, button_col_2 = st.columns(2, gap="small")
     with button_col_1:
         back_to_landing = st.button(
             "Back to Landing",
@@ -1190,91 +1483,59 @@ if sidebar_menu == "Data Upload":
                 or not _is_control_enabled("data_upload_button")
             ),
         )
-    with button_col_3:
-        st.download_button(
-            "Download Sanitized File",
-            data=st.session_state.get("smart_sanitizer_download_bytes", b""),
-            file_name=st.session_state.get("smart_sanitizer_download_name", "sanitised_output.csv"),
-            mime=st.session_state.get(
-                "smart_sanitizer_download_mime",
-                "text/csv",
-            ),
-            type="primary",
-            use_container_width=True,
-            disabled=not st.session_state.get("smart_sanitizer_result_ready", False),
-            key="data_upload_download_button",
-        )
-
+    
     if back_to_landing:
         st.query_params["page"] = "landing"
         st.rerun()
-    if upload_button_clicked:
-        st.session_state["smart_sanitizer_run_requested"] = True
-        st.rerun()
+    if upload_button_clicked and uploaded_source_file is not None and source_upload_df is not None:
+        if not any(
+            [
+                sanitize_eszett,
+                sanitize_numbers_roman,
+                sanitize_html_content,
+                sanitize_accented,
+                sanitize_newlines_spaces,
+                sanitize_english_punct,
+                sanitize_special_chars,
+                sanitize_cjk,
+            ]
+        ):
+            st.warning("Select at least one sanitizer option before running Smart Sanitizer.")
+            st.stop()
 
-    if uploaded_source_file is not None and source_upload_df is not None:
-        if st.session_state.get("smart_sanitizer_last_source_name") != uploaded_source_file.name:
-            for session_key in (
-                "smart_sanitizer_output_df",
-                "smart_sanitizer_download_bytes",
-                "smart_sanitizer_download_name",
-                "smart_sanitizer_download_mime",
-                "smart_sanitizer_preview_df",
-                "smart_sanitizer_result_ready",
-            ):
-                st.session_state.pop(session_key, None)
-            st.session_state["smart_sanitizer_last_source_name"] = uploaded_source_file.name
-
-        if st.session_state.get("smart_sanitizer_run_requested"):
-            if not any(
-                [
-                    sanitize_accented,
-                    sanitize_newlines_spaces,
-                    sanitize_english_punct,
-                    sanitize_special_chars,
-                    sanitize_cjk,
-                ]
-            ):
-                st.warning("Select at least one sanitizer option before running Smart Sanitizer.")
-                st.stop()
-
-            sanitized_values = _sanitize_selected_column(
-                source_upload_df[selected_sanitizer_column],
-                remove_accented=sanitize_accented,
-                normalize_spaces=sanitize_newlines_spaces,
-                remove_english_punctuation=sanitize_english_punct,
-                remove_special_characters=sanitize_special_chars,
-                remove_cjk=sanitize_cjk,
-            )
-            cleaned_df = source_upload_df.copy()
-            cleaned_df[selected_sanitizer_column] = sanitized_values
-            download_bytes, download_name, download_mime = _build_sanitizer_download_payload(
-                source_upload_df,
-                uploaded_source_file.name,
-                selected_sanitizer_column,
-                sanitized_values,
-            )
-            preview_df = pd.DataFrame(
-                {
-                    "Original": source_upload_df[selected_sanitizer_column].fillna("").astype(str).head(20),
-                    "Sanitized": sanitized_values.fillna("").astype(str).head(20),
-                }
-            )
-
-            st.session_state["smart_sanitizer_output_df"] = cleaned_df
-            st.session_state["smart_sanitizer_download_bytes"] = download_bytes
-            st.session_state["smart_sanitizer_download_name"] = download_name
-            st.session_state["smart_sanitizer_download_mime"] = download_mime
-            st.session_state["smart_sanitizer_preview_df"] = preview_df
-            st.session_state["smart_sanitizer_result_ready"] = True
-            st.session_state["smart_sanitizer_run_requested"] = False
-            st.rerun()
-
-    if st.session_state.get("smart_sanitizer_result_ready") and "smart_sanitizer_preview_df" in st.session_state:
-        st.success(
-            f"Smart Sanitizer completed for column `{st.session_state.get('smart_sanitizer_selected_column', '')}`."
+        cleaned_df = source_upload_df.copy()
+        cleaned_df[selected_sanitizer_column] = _sanitize_selected_column(
+            cleaned_df[selected_sanitizer_column],
+            remove_eszett=sanitize_eszett,
+            remove_numbers_roman=sanitize_numbers_roman,
+            remove_html_content=sanitize_html_content,
+            remove_accented=sanitize_accented,
+            normalize_spaces=sanitize_newlines_spaces,
+            remove_english_punctuation=sanitize_english_punct,
+            remove_special_characters=sanitize_special_chars,
+            remove_cjk=sanitize_cjk,
         )
-        st.dataframe(st.session_state["smart_sanitizer_preview_df"], use_container_width=True)
+        st.session_state["smart_sanitizer_output_df"] = cleaned_df
+
+        preview_df = pd.DataFrame(
+            {
+                "Original": source_upload_df[selected_sanitizer_column].fillna("").astype(str).head(20),
+                "Sanitized": cleaned_df[selected_sanitizer_column].fillna("").astype(str).head(20),
+            }
+        )
+
+        # with st.spinner("Saving uploaded data to DB..."):
+        #     upload_id, saved_row_count = _save_data_upload_to_db(
+        #         source_upload_df,
+        #         mapping_df,
+        #         uploaded_source_file.name,
+        #     )
+        # st.success(
+        #     f"Smart Sanitizer completed successfully. Upload ID: `{upload_id}`. "
+        #     f"Saved rows: {saved_row_count}. DB: `{DATA_UPLOAD_DB_PATH}`"
+        # )
+        st.success(f"Smart Sanitizer completed for column `{selected_sanitizer_column}`.")
+        st.dataframe(preview_df, use_container_width=True)
         st.caption("DB save flow is temporarily disabled.")
 
     st.markdown("Switch to **Name Matching** from the left menu to run matching.")
@@ -1593,10 +1854,6 @@ else:
     left_df = read_table(left_file)
     right_df = read_table(right_file)
 
-reference_data_path: str | None = DEMO_TARGET_PATH if use_demo_files else None
-if not use_demo_files and right_file is not None and right_file.name:
-    reference_data_path = right_file.name if os.path.isabs(right_file.name) else None
-
 if left_df is None or right_df is None:
     st.info("Upload both files to start matching, or enable demo files in the sidebar.")
     st.stop()
@@ -1709,6 +1966,23 @@ if include_industry and left_industry_col and left_industry_col != left_name_col
 if include_industry and right_industry_col and right_industry_col != right_name_col:
     right_extra_cols.append(right_industry_col)
 
+left_selected_cols = [left_name_col]
+right_selected_cols = [right_name_col]
+if include_location and left_location_col:
+    left_selected_cols.append(left_location_col)
+if include_location and right_location_col:
+    right_selected_cols.append(right_location_col)
+left_selected_cols.extend(left_extra_cols)
+right_selected_cols.extend(right_extra_cols)
+
+left_df, left_header_rows_dropped = _drop_header_like_rows(left_df, left_selected_cols)
+right_df, right_header_rows_dropped = _drop_header_like_rows(right_df, right_selected_cols)
+if left_header_rows_dropped or right_header_rows_dropped:
+    st.caption(
+        "Ignored header-like rows in uploaded data "
+        f"(source: {left_header_rows_dropped}, target: {right_header_rows_dropped})."
+    )
+
 left_names = _compose_match_values(left_df, left_name_col, left_extra_cols)
 right_names = _compose_match_values(right_df, right_name_col, right_extra_cols)
 
@@ -1765,7 +2039,7 @@ if run_now:
                     st.caption(f"SLM pre-prime skipped: {exc}")
 
     with st.spinner("Matching names..."):
-        _feedback_token = _feedback_cache_token(FEEDBACK_DB_PATH)
+        feedback_token = _feedback_cache_token(FEEDBACK_DB_PATH)
         _use_staged = (
             include_location
             and left_location_col is not None
@@ -1783,7 +2057,7 @@ if run_now:
                 int(threshold),
                 int(lev_max_distance),
                 lev_engine,
-                _feedback_token,
+                feedback_token,
             )
         else:
             st.session_state["result_df"] = run_matching(
@@ -1793,7 +2067,7 @@ if run_now:
                 int(threshold),
                 int(lev_max_distance),
                 lev_engine,
-                _feedback_token,
+                feedback_token,
             )
     st.session_state["scroll_to_top_matches"] = True
     has_results = True
@@ -2002,10 +2276,31 @@ if st.session_state.pop("scroll_to_top_matches", False):
         height=0,
     )
 
-st.link_button(
+download_bytes = full_result_df.to_csv(index=False).encode("utf-8")
+download_name = "matched_data.csv"
+download_mime = "text/csv"
+if not use_demo_files and left_file is not None:
+    source_name = str(left_file.name or "").strip()
+    base_name, source_ext = os.path.splitext(os.path.basename(source_name))
+    safe_base = base_name or "matched_data"
+    if source_ext.lower() == ".xlsx":
+        output_buffer = BytesIO()
+        with pd.ExcelWriter(output_buffer, engine="openpyxl") as writer:
+            full_result_df.to_excel(writer, index=False, sheet_name="Matched Results")
+        output_buffer.seek(0)
+        download_bytes = output_buffer.getvalue()
+        download_name = f"{safe_base}_matched.xlsx"
+        download_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    elif source_ext.lower() == ".csv":
+        download_name = f"{safe_base}_matched.csv"
+
+st.download_button(
     "Download Match Results",
-    "https://www.linkedin.com/in/surabhi-singh-368042167/",
+    data=download_bytes,
+    file_name=download_name,
+    mime=download_mime,
     use_container_width=True,
+    key="download_match_results",
 )
 
 # ---------------------------------------------------------------------------
@@ -2049,10 +2344,13 @@ def _top_country_candidates(
 def _row_enrich_dialog(
     source_name: str,
     source_country_value: str,
-    source_record: dict[str, object],
     name_candidates: list[str],
     country_candidates: list[str],
-    reference_data_path: str | None,
+    country_col_label: str,
+    right_df_cols: list[str],
+    use_demo_files: bool,
+    right_name_col: str,
+    country_col: str | None,
     row_original_index: int,
 ) -> None:
     """Modal dialog: RLHF trains the SLM; Enrichment adds to the reference file."""
@@ -2109,25 +2407,25 @@ def _row_enrich_dialog(
             if not _effective_name:
                 st.warning("Could not enrich because source name is blank.")
             else:
-                _new_ref_row: dict[str, object] = dict(source_record or {})
-                _new_ref_row["SAVED_Name"] = _effective_name
-                _new_ref_row["CONFIRMED_COUNTRY"] = _effective_country
-
-                try:
-                    _reference_dir = os.path.dirname(reference_data_path) if reference_data_path else os.getcwd()
-                    _enriched_path = os.path.join(_reference_dir, "Enricheddata.csv")
-                    _new_row_df = pd.DataFrame([_new_ref_row])
-
-                    if os.path.exists(_enriched_path):
-                        _existing_df = pd.read_csv(_enriched_path)
-                        _out_df = pd.concat([_existing_df, _new_row_df], ignore_index=True, sort=False)
-                    else:
-                        _out_df = _new_row_df
-
-                    _out_df.to_csv(_enriched_path, index=False)
-                    st.success(f"Enrichment saved to `{_enriched_path}`")
-                except Exception as _exc_enr:
-                    st.error(f"Could not write Enricheddata file: {_exc_enr}")
+                _new_ref_row: dict[str, object] = {col: "" for col in right_df_cols}
+                _new_ref_row[right_name_col] = _effective_name
+                if country_col and country_col in _new_ref_row:
+                    _new_ref_row[country_col] = _effective_country
+                _enr_list = list(st.session_state.get("_enrichment_rows", []))
+                _enr_list.append(_new_ref_row)
+                st.session_state["_enrichment_rows"] = _enr_list
+                if use_demo_files:
+                    try:
+                        _demo_ref = pd.read_csv(DEMO_TARGET_PATH)
+                        _demo_ref = pd.concat(
+                            [_demo_ref, pd.DataFrame([_new_ref_row])], ignore_index=True
+                        )
+                        _demo_ref.to_csv(DEMO_TARGET_PATH, index=False)
+                        st.success(f"Reference file updated with '{_effective_name}'.")
+                    except Exception as _exc_enr:
+                        st.error(f"Could not write reference file: {_exc_enr}")
+                else:
+                    st.success(f"'{_effective_name}' queued � download the enriched rows below the feedback panel.")
                 st.rerun()
 
 
@@ -2220,14 +2518,13 @@ with st.expander("Confirm Matches � Self-Learning Feedback", expanded=False):
             _row_enrich_dialog(
                 source_name=_sel_source_name,
                 source_country_value=_sel_source_country,
-                source_record=(
-                    left_df.loc[_sel_orig_idx].to_dict()
-                    if _sel_orig_idx in left_df.index
-                    else {"source_name": _sel_source_name}
-                ),
                 name_candidates=_name_cands,
                 country_candidates=_country_cands,
-                reference_data_path=reference_data_path,
+                country_col_label=_country_col or "Country",
+                right_df_cols=right_df.columns.tolist(),
+                use_demo_files=use_demo_files,
+                right_name_col=right_name_col,
+                country_col=_country_col,
                 row_original_index=_sel_orig_idx,
             )
         st.divider()
@@ -2256,15 +2553,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<div class="nm-muted">Ask about matching methods, thresholds, or troubleshooting. (Set `OPENAI_API_KEY` to enable.)</div>',
+    '<div class="nm-muted">Ask about matching methods, thresholds, or troubleshooting. All analysis uses your local SLM model.</div>',
     unsafe_allow_html=True,
 )
 
 settings_col, clear_col = st.columns([4, 1], gap="small")
 with settings_col:
     with st.expander("Assistant settings", expanded=False):
-        chat_model = st.text_input("Model", value="gpt-4o-mini")
-        chat_temperature = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
         include_app_context = st.checkbox(
             "Include current app context",
             value=True,
@@ -2323,19 +2618,6 @@ if not user_prompt and "quick_prompt" in st.session_state:
 if user_prompt:
     st.session_state["chat_messages"].append({"role": "user", "content": user_prompt})
 
-    client = _get_openai_client()
-    if client is None:
-        st.session_state["chat_messages"].append(
-            {
-                "role": "assistant",
-                "content": (
-                    "I cannot call the AI model yet. Set `OPENAI_API_KEY` in your environment "
-                    "or `.streamlit/secrets.toml` and try again."
-                ),
-            }
-        )
-        st.rerun()
-
     context_lines: list[str] = []
     if include_app_context:
         context_lines = [
@@ -2351,28 +2633,17 @@ if user_prompt:
             f"Rows in result: {len(result_df)}",
         ]
 
-    user_content = user_prompt
-    if context_lines:
-        user_content = f"{user_prompt}\n\nApp context:\n" + "\n".join(context_lines)
+    app_context_str = "\n".join(context_lines) if context_lines else ""
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            try:
-                response = client.chat.completions.create(
-                    model=chat_model,
-                    messages=[
-                        {"role": "system", "content": _chat_system_prompt()},
-                        *st.session_state["chat_messages"][:-1],
-                        {"role": "user", "content": user_content},
-                    ],
-                    temperature=float(chat_temperature),
-                )
-                answer = response.choices[0].message.content or ""
-            except Exception as error:
-                answer = f"Sorry, I hit an error calling the model: `{type(error).__name__}`."
+        # Generate SLM-based explanation locally (no external API calls)
+        try:
+            answer = _generate_slm_explanation(user_prompt, app_context_str)
+        except Exception as error:
+            answer = f"An error occurred while generating the explanation: {type(error).__name__}"
 
-            st.markdown(answer)
-            st.session_state["chat_messages"].append({"role": "assistant", "content": answer})
+        st.markdown(answer)
+        st.session_state["chat_messages"].append({"role": "assistant", "content": answer})
 
 st.markdown("</div>", unsafe_allow_html=True)
 st.markdown(

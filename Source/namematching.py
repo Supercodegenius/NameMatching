@@ -124,23 +124,22 @@ def _canonicalize_terminal_legal_suffix(text: str) -> str:
         break
     return " ".join(tokens)
 
-_LEGAL_SUFFIXES = {
-    "ltd", "limited", "plc", "llc", "inc", "corp", "co", "company",
-    "ag", "sa", "spa", "gmbh", "bv", "nv", "oy", "ab",
-    "pte", "pvt", "kg", "kgaa", "sas", "sarl", "llp", "lp",
+_TRANSLIT_ALIASES = {
+    "muenchener": "munchener", "rueck": "ruck", "rueckversicherung": "ruckversicherung",
+    "rueckversicherungs": "ruckversicherungs", "zuerich": "zurich", "koeln": "koln",
+    "duesseldorf": "dusseldorf", "nuernberg": "nurnberg", "fuer": "fur", "ueber": "uber",
 }
-
 
 @lru_cache(maxsize=250000)
 def _normalize_name_cached(raw_text: str) -> str:
-    text = raw_text.strip().lower()
+    text = raw_text.strip().lower().replace("ß", "ss")
     text = _DASH_RE.sub(" ", text)  # replace hyphens/dashes with space before encoding
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     text = _NON_ALNUM_SPACE_RE.sub(" ", text)
     text = _WHITESPACE_RE.sub(" ", text).strip()
+    text = " ".join(_TRANSLIT_ALIASES.get(tok, tok) for tok in text.split())
     text = _canonicalize_terminal_legal_suffix(text)
-    tokens = [t for t in text.split() if t not in _LEGAL_SUFFIXES]
-    return " ".join(tokens)
+    return text
 
 
 def normalize_name(value: str) -> str:
@@ -1303,6 +1302,8 @@ def match_names(
         return pd.DataFrame(results)
 
     if method in {"slm", "vector_similarity", "slm_adaptive"}:
+        import time as _time
+        _slm_t0 = _time.monotonic()
         slm_runtime = _load_slm_runtime()
         torch = slm_runtime["torch"]
         embed_many = slm_runtime["embed_many"]
@@ -1540,7 +1541,8 @@ def match_names(
                         best_slm_score = -1.0
                     elif best_slm_score > 1.0:
                         best_slm_score = 1.0
-                else:
+
+                if not best_name:
                     candidate_indices = candidate_map.get(src_query_n, all_indices)
                     if rejected_targets:
                         candidate_indices = [
@@ -1554,31 +1556,51 @@ def match_names(
                         source_embedding_map[src_query_n] = src_embedding
                     if candidate_indices:
                         candidate_positions = candidate_pos_map.get(src_query_n)
-                        if candidate_positions is None:
-                            candidate_positions = [required_index_to_pos[idx] for idx in candidate_indices]
-                        candidate_tensor = required_target_embeddings[candidate_positions]
+                        if candidate_positions is None and required_index_to_pos:
+                            try:
+                                candidate_positions = [required_index_to_pos[idx] for idx in candidate_indices]
+                            except KeyError:
+                                candidate_positions = None
+
+                        if candidate_positions is not None and required_target_embeddings.numel() > 0:
+                            candidate_tensor = required_target_embeddings[candidate_positions]
+                        else:
+                            candidate_texts = [target_normalized[idx] for idx in candidate_indices]
+                            candidate_tensor = embed_many(candidate_texts)
+
                         similarities = torch.matmul(candidate_tensor, src_embedding)
                         sorted_positions = torch.argsort(similarities, descending=True)
+
+                        best_idx = -1
                         fallback_idx = -1
                         fallback_score = -1.0
                         for pos_tensor in sorted_positions:
                             best_pos = int(pos_tensor.item())
                             candidate_idx = candidate_indices[best_pos]
                             candidate_target_norm = target_normalized[candidate_idx]
+                            if candidate_target_norm in rejected_targets:
+                                continue
                             candidate_score = float(similarities[best_pos].item())
                             if fallback_idx < 0:
                                 fallback_idx = candidate_idx
                                 fallback_score = candidate_score
                             if _slm_lexical_guard_passes(src_query_n, candidate_target_norm):
-                                best_slm_score = candidate_score
-                                best_name = target_originals[candidate_idx]
+                                best_idx = candidate_idx
                                 best_target_norm = candidate_target_norm
+                                best_slm_score = candidate_score
                                 break
 
-                        if not best_name and fallback_idx >= 0:
-                            best_slm_score = fallback_score
-                            best_name = target_originals[fallback_idx]
+                        if best_idx < 0 and fallback_idx >= 0:
+                            best_idx = fallback_idx
                             best_target_norm = target_normalized[fallback_idx]
+                            best_slm_score = fallback_score
+
+                        if best_idx < 0:
+                            best_slm_score = -1.0
+                            best_target_norm = ""
+                            best_name = ""
+                        else:
+                            best_name = target_originals[best_idx]
 
                         if best_slm_score < -1.0:
                             best_slm_score = -1.0
@@ -1601,6 +1623,79 @@ def match_names(
                 }
 
             results.append({"source_name": src, **best_cache[src_n]})
+
+        # --- explainability, attribute checks and review routing (best-effort) ---
+        try:
+            try:
+                from Source import slm_advanced as _adv
+            except ImportError:
+                import slm_advanced as _adv
+            _band = _adv.load_band()
+            for _r in results:
+                _m = _r.get("matched_name") or ""
+                if not _m:
+                    _r.update(slm_explanation="", slm_attr_penalty=0.0, slm_same_parent=False, slm_decision="no_match")
+                    continue
+                _e = _adv.explain(_r["source_name"], _m, _r.get("slm_raw_score"))
+                _r["slm_explanation"] = "; ".join(_e["notes"])
+                _r["slm_attr_penalty"] = _e["attribute_penalty"]
+                _r["slm_same_parent"] = _e["same_parent"]
+                if _r.get("slm_stage") == "feedback_confirmed":
+                    _r["slm_decision"] = "auto_accept"
+                elif _band:
+                    _r["slm_decision"] = _adv.decide(float(_r.get("slm_raw_score", 0.0)), _band)
+                else:
+                    _r["slm_decision"] = "review" if _e["attribute_penalty"] > 0 else "auto_accept"
+                if _e["attribute_penalty"] > 0 and _r["slm_decision"] == "auto_accept":
+                    _r["slm_decision"] = "review"
+        except Exception:
+            pass
+
+        # --- emit telemetry (best-effort, never crashes inference) ---
+        try:
+            import uuid as _uuid
+            from datetime import datetime as _dt, timezone as _tz
+            try:
+                from Source.slm_monitor import log_inference_run as _log_run, get_model_version as _get_mv
+            except ImportError:
+                from slm_monitor import log_inference_run as _log_run, get_model_version as _get_mv
+            _stage_counts: dict[str, int] = {"fast": 0, "exact": 0, "deep": 0, "feedback": 0}
+            for _r in results:
+                _stage = _r.get("slm_stage", "deep")
+                if _stage == "fast":
+                    _stage_counts["fast"] += 1
+                elif _stage == "exact":
+                    _stage_counts["exact"] += 1
+                elif _stage == "feedback_confirmed":
+                    _stage_counts["feedback"] += 1
+                else:
+                    _stage_counts["deep"] += 1
+            _matched = [_r for _r in results if _r.get("is_match")]
+            _avg_score = (
+                sum(_r.get("score", 0) for _r in _matched) / len(_matched)
+                if _matched else 0.0
+            )
+            _telemetry_db = str(
+                Path(__file__).resolve().parent.parent / "outputs" / "slm_telemetry.db"
+            )
+            _log_run(_telemetry_db, {
+                "run_id": str(_uuid.uuid4()),
+                "ts": _dt.now(_tz.utc).isoformat(),
+                "method": method,
+                "source_count": len(results),
+                "matched_count": len(_matched),
+                "avg_score": _avg_score,
+                "feedback_hits": _stage_counts["feedback"],
+                "stage_fast": _stage_counts["fast"],
+                "stage_exact": _stage_counts["exact"],
+                "stage_deep": _stage_counts["deep"],
+                "stage_feedback": _stage_counts["feedback"],
+                "inference_ms": round((_time.monotonic() - _slm_t0) * 1000, 1),
+                "model_version": _get_mv(),
+            })
+        except Exception:
+            pass
+
         return pd.DataFrame(results)
 
     raise ValueError(f"Unknown method: {method}")

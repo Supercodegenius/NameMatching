@@ -1,12 +1,17 @@
+# Build with AI: AI-Powered Name Matching
+# Dashboards with Streamlit
+# Name Matching UI Building with Streamlit and Python
+
+# Developed By Ambuj Kumar
+
 import os
-import time
 from textwrap import dedent
 
 import streamlit as st
 from streamlit.components.v1 import html
 
 
-FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png")
+FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png.jpeg")
 
 
 def _safe_set_page_config(**kwargs) -> None:
@@ -26,33 +31,19 @@ _safe_set_page_config(
 st.markdown(
     dedent(
         """
+         <head>
+        <title>How AI Name Matching Works | Entity Resolution for Reinsurance</title>
+        <meta name="description" content="Learn how RematchingAI uses machine learning, fuzzy logic, and entity resolution to match insured names with high accuracy. Built for reinsurance, insurance, and financial services data quality.">
+        <meta name="keywords" content="AI name matching, entity resolution, reinsurance automation, fuzzy matching, machine learning name matching, insurance data quality, bordereaux processing, insured name matching">
+        <meta name="robots" content="index, follow">
+        <link rel="canonical" href="https://rematchingai.com/howmatchworks">
+    </head>
         <style>
           html,
           body,
           .stApp {
             margin: 0;
             min-height: 100%;
-          }
-
-          html,
-          body {
-            height: 100%;
-            overflow: hidden !important;
-          }
-
-          .stApp,
-          div[data-testid="stAppViewContainer"],
-          section.main,
-          div[data-testid="stAppViewContainer"] > .main {
-            height: 100%;
-            overflow: hidden !important;
-          }
-
-          section[data-testid="stMain"],
-          div[data-testid="stMain"] {
-            height: 100%;
-            overflow-y: auto !important;
-            overflow-x: hidden !important;
           }
 
           .stApp {
@@ -188,16 +179,19 @@ html(
                 margin: 0.62rem auto 0;
                 max-width: 56rem;
                 color: #32363d;
-                font-size: clamp(1.03rem, 1.35vw, 1.4rem);
-                line-height: 1.25;
+                font-size: clamp(1.03rem, 1.38vw, 1.55rem);
+                line-height: 1.15;
                 font-weight: 500;
               }
 
               .hm-grid {
-                margin-top: 2rem;
+                position: relative;
+                z-index: 1;
+                margin-top: 2.4rem;
                 display: grid;
-                grid-template-columns: repeat(4, minmax(0, 1fr));
-                gap: 1.25rem;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 1.55rem;
+                align-items: stretch;
               }
 
               .hm-back-row {
@@ -230,22 +224,27 @@ html(
               }
 
               .hm-col {
+                text-align: left;
+                max-width: 35rem;
+                margin: 0 auto;
+                width: 100%;
+                height: 100%;
+                padding: 1.5rem 1.35rem 1.2rem;
                 border-radius: 0.95rem;
+                background: #ffffff;
                 border: 1px solid rgba(18, 19, 26, 0.08);
-                background: rgba(255, 255, 255, 0.88);
-                padding: 1.25rem 1.3rem;
-                box-shadow: 0 14px 24px rgba(21, 34, 55, 0.12);
+                box-shadow: 0 4px 12px rgba(18, 19, 26, 0.035);
               }
 
               .hm-icon {
-                width: 2.6rem;
-                height: 2.6rem;
-                border-radius: 0.7rem;
+                width: 2.3rem;
+                height: 2.3rem;
+                border-radius: 0.64rem;
+                background: linear-gradient(180deg, #e9f2ff, #dfeafd);
+                color: #2f70d8;
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                background: linear-gradient(180deg, #e9f2ff, #dae8fc);
-                color: #2f70d8;
                 margin-bottom: 0;
                 flex: 0 0 auto;
               }
@@ -254,24 +253,24 @@ html(
                 display: flex;
                 align-items: center;
                 gap: 0.72rem;
-                margin-bottom: 1rem;
+                margin-bottom: 0.88rem;
               }
 
               .hm-icon-mark {
-                width: 1rem;
-                height: 1rem;
-                border: 2px solid #2f70d8;
+                width: 0.88rem;
+                height: 0.88rem;
+                border: 1.8px solid #2f70d8;
                 border-radius: 0.2rem;
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                font-size: 0.7rem;
-                font-weight: 800;
+                font-size: 0.57rem;
                 line-height: 1;
+                font-weight: 800;
               }
 
               .hm-icon-star {
-                font-size: 1.08rem;
+                font-size: 1rem;
                 line-height: 1;
               }
 
@@ -460,7 +459,7 @@ html(
         </html>
         """
     ),
-      height=560,
+      height=520,
       scrolling=True,
 )
 
@@ -494,12 +493,7 @@ st.markdown(
 
 left_spacer, button_col, right_spacer = st.columns([4, 2, 4])
 with button_col:
-  back_clicked = st.button("Back to Landing", type="primary", use_container_width=True, key="how_match_works_back")
-
-if back_clicked:
-  st.query_params.clear()
-  st.query_params["page"] = "landing"
-  st.query_params["nav"] = str(int(time.time() * 1000))
-  st.rerun()
-
+    if st.button("Back to Landing", type="primary", use_container_width=True, key="how_match_works_back"):
+        st.query_params["page"] = "landing"
+        st.rerun()
 
